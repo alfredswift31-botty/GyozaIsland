@@ -14,8 +14,11 @@ struct ContentView: View {
     private var collapsedHeight: CGFloat { panelState.collapsedSize.height }
     private let expandedWidth: CGFloat = 300
     private let expandedHeight: CGFloat = 104
-    private let hoverInAnimation = Animation.linear(duration: 0.22)
-    private let hoverOutAnimation = Animation.linear(duration: 0.26)
+    // Spring physics give the Apple-like bounce-then-settle feel. Lower
+    // damping on hover-in for a small overshoot; higher damping on hover-out
+    // so the pill returns to the notch without jiggle.
+    private let hoverInAnimation = Animation.spring(response: 0.42, dampingFraction: 0.78)
+    private let hoverOutAnimation = Animation.spring(response: 0.50, dampingFraction: 0.92)
 
     private var isExpandedTarget: Bool {
         panelState.isInteractionActive || isHoveringIsland
@@ -167,20 +170,20 @@ private func delayedProgress(_ progress: CGFloat, start: CGFloat) -> CGFloat {
 }
 
 private extension ContentView {
+    // The spring driving expansionProgress already supplies the easing curve,
+    // so these properties pass through without the previous cubic ease-out.
+    // Double-easing flattened the spring's overshoot.
     var bodyProgress: CGFloat {
-        easedProgress(shapeProgress)
+        shapeProgress
     }
 
     var shoulderProgress: CGFloat {
-        easedProgress(delayedProgress(shapeProgress, start: 0.34))
+        delayedProgress(shapeProgress, start: 0.34)
     }
 
+    // Delay the shadow until the pill is meaningfully extended; at rest the
+    // pill has no shadow so it blends with the real notch.
     var shadowProgress: CGFloat {
-        delayedProgress(bodyProgress, start: 0.22)
+        delayedProgress(bodyProgress, start: 0.45)
     }
-}
-
-private func easedProgress(_ progress: CGFloat) -> CGFloat {
-    let clamped = min(max(progress, 0), 1)
-    return 1 - pow(1 - clamped, 3)
 }
