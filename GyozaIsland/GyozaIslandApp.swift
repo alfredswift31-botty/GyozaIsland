@@ -15,6 +15,10 @@ final class IslandPanelState: ObservableObject {
     /// Detected size of the real notch (or menu-bar-thickness fallback) so the
     /// resting pill can match the system silhouette exactly.
     @Published var collapsedSize: CGSize = CGSize(width: 200, height: 32)
+    /// Full top-reserved band height (notch + any extra menu bar strip below
+    /// it). The expanded shape's flare lands here so the wider card body
+    /// starts exactly at the menu bar's bottom edge.
+    @Published var bandHeight: CGFloat = 37
 }
 
 @main
@@ -55,8 +59,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        panel.level = .statusBar
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        // Draw above the system menu bar so the pill's flare in the menu bar
+        // reserve strip is actually visible — at .statusBar (25) the menu bar
+        // background paints over the flare and the expanded card looks
+        // disconnected from the top of the screen.
+        panel.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isMovableByWindowBackground = false
@@ -137,6 +145,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let detected = CGSize(width: metrics.notchWidth, height: metrics.bandHeight)
         if panelState.collapsedSize != detected {
             panelState.collapsedSize = detected
+        }
+        if panelState.bandHeight != metrics.bandHeight {
+            panelState.bandHeight = metrics.bandHeight
         }
     }
 
