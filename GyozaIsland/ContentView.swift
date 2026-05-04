@@ -62,7 +62,7 @@ struct ContentView: View {
             alignment: .top
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .contentShape(IslandShellShape(progress: bodyProgress, shoulderProgress: shoulderProgress))
+        .contentShape(IslandShellShape(progress: bodyProgress, shoulderProgress: shoulderProgress, topWidth: collapsedWidth))
         .onHover { isHovering in
             if isHovering != isHoveringIsland {
                 isHoveringIsland = isHovering
@@ -71,7 +71,7 @@ struct ContentView: View {
     }
 
     private var islandShadow: some View {
-        IslandShellShape(progress: bodyProgress, shoulderProgress: shoulderProgress)
+        IslandShellShape(progress: bodyProgress, shoulderProgress: shoulderProgress, topWidth: collapsedWidth)
             .fill(Color.black.opacity(0.001))
             .shadow(
                 color: .black.opacity(shadowProgress * 0.1),
@@ -83,10 +83,10 @@ struct ContentView: View {
     }
 
     private var islandSurface: some View {
-        IslandShellShape(progress: bodyProgress, shoulderProgress: shoulderProgress)
+        IslandShellShape(progress: bodyProgress, shoulderProgress: shoulderProgress, topWidth: collapsedWidth)
             .fill(Color.black)
             .overlay(
-                IslandShellShape(progress: bodyProgress, shoulderProgress: shoulderProgress)
+                IslandShellShape(progress: bodyProgress, shoulderProgress: shoulderProgress, topWidth: collapsedWidth)
                     .stroke(Color.white.opacity(lerp(0.015, 0.08, bodyProgress)), lineWidth: 1)
             )
     }
@@ -95,6 +95,11 @@ struct ContentView: View {
 private struct IslandShellShape: Shape {
     var progress: CGFloat
     var shoulderProgress: CGFloat
+    /// Width of the real notch silhouette. The top portion of the shape stays
+    /// pinned to this width regardless of how wide `rect` becomes during
+    /// expansion, so the expanded card looks like it grows out *from beneath*
+    /// the notch instead of replacing it with a wider pill.
+    var topWidth: CGFloat
 
     var animatableData: AnimatablePair<CGFloat, CGFloat> {
         get { AnimatablePair(progress, shoulderProgress) }
@@ -113,19 +118,45 @@ private struct IslandShellShape: Shape {
         let topControlInset = lerp(2, 2.5, s)
         let shoulderControlDepth = lerp(1.5, 1.9, s)
 
-        let topLeft = CGPoint(x: rect.minX + shoulderInset, y: rect.minY)
-        let topRight = CGPoint(x: rect.maxX - shoulderInset, y: rect.minY)
-        let rightShoulder = CGPoint(x: rect.maxX, y: rect.minY + shoulderDepth)
-        let leftShoulder = CGPoint(x: rect.minX, y: rect.minY + shoulderDepth)
+        // The notch occupies a fixed-width band centered horizontally in the
+        // rect. Any extra rect width is the flare region that sits *below* the
+        // notch shoulders.
+        let clampedTopWidth = min(max(topWidth, 0), rect.width)
+        let topMinX = rect.midX - clampedTopWidth / 2
+        let topMaxX = rect.midX + clampedTopWidth / 2
+
+        let topLeft = CGPoint(x: topMinX + shoulderInset, y: rect.minY)
+        let topRight = CGPoint(x: topMaxX - shoulderInset, y: rect.minY)
+        let rightShoulder = CGPoint(x: topMaxX, y: rect.minY + shoulderDepth)
+        let leftShoulder = CGPoint(x: topMinX, y: rect.minY + shoulderDepth)
+
+        // How far the side wall takes to flare from the notch shoulder out to
+        // the rect edge. Zero when collapsed (no flare) so this falls back to
+        // the original notch silhouette exactly.
+        let flareDepth = lerp(0, 22, p)
+        let rightFlareEnd = CGPoint(x: rect.maxX, y: rect.minY + shoulderDepth + flareDepth)
+        let leftFlareEnd = CGPoint(x: rect.minX, y: rect.minY + shoulderDepth + flareDepth)
 
         var path = Path()
         path.move(to: topLeft)
         path.addLine(to: topRight)
+
+        // Right notch shoulder (curve from flat top down into the notch's
+        // rounded outer corner — same silhouette as the real hardware notch).
         path.addCurve(
             to: rightShoulder,
-            control1: CGPoint(x: rect.maxX - topControlInset, y: rect.minY),
-            control2: CGPoint(x: rect.maxX, y: rect.minY + shoulderControlDepth)
+            control1: CGPoint(x: topMaxX - topControlInset, y: rect.minY),
+            control2: CGPoint(x: topMaxX, y: rect.minY + shoulderControlDepth)
         )
+
+        // Right flare: smooth S-curve from the notch shoulder outward to the
+        // expanded card's right wall. Degenerates to nothing when collapsed.
+        path.addCurve(
+            to: rightFlareEnd,
+            control1: CGPoint(x: topMaxX, y: rect.minY + shoulderDepth + flareDepth / 2),
+            control2: CGPoint(x: rect.maxX, y: rect.minY + shoulderDepth + flareDepth / 2)
+        )
+
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottomCornerRadius))
         path.addArc(
             center: CGPoint(
@@ -149,11 +180,21 @@ private struct IslandShellShape: Shape {
             endAngle: .degrees(180),
             clockwise: false
         )
-        path.addLine(to: leftShoulder)
+
+        path.addLine(to: leftFlareEnd)
+
+        // Left flare: mirror of the right flare, curving inward from the wall
+        // up to the notch's left shoulder.
+        path.addCurve(
+            to: leftShoulder,
+            control1: CGPoint(x: rect.minX, y: rect.minY + shoulderDepth + flareDepth / 2),
+            control2: CGPoint(x: topMinX, y: rect.minY + shoulderDepth + flareDepth / 2)
+        )
+
         path.addCurve(
             to: topLeft,
-            control1: CGPoint(x: rect.minX, y: rect.minY + shoulderControlDepth),
-            control2: CGPoint(x: rect.minX + topControlInset, y: rect.minY)
+            control1: CGPoint(x: topMinX, y: rect.minY + shoulderControlDepth),
+            control2: CGPoint(x: topMinX + topControlInset, y: rect.minY)
         )
         path.closeSubpath()
         return path
