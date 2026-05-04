@@ -12,6 +12,9 @@ import Combine
 
 final class IslandPanelState: ObservableObject {
     @Published var isInteractionActive = false
+    /// Detected size of the real notch (or menu-bar-thickness fallback) so the
+    /// resting pill can match the system silhouette exactly.
+    @Published var collapsedSize: CGSize = CGSize(width: 200, height: 32)
 }
 
 @main
@@ -36,11 +39,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var islandPanel: NSPanel?
     private var mouseTrackingTimer: Timer?
-    private var isPanelVisible = false
     private let panelState = IslandPanelState()
-    private let panelSize = NSSize(width: 284, height: 96)
-    private let collapsedNotchHeight: CGFloat = 30
-    private let visualOffsetY: CGFloat = 10
+    private let panelSize = NSSize(width: 320, height: 132)
+    private let collapsedNotchHeight: CGFloat = 32
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let panel = NSPanel(
@@ -62,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.standardWindowButton(.closeButton)?.isHidden = true
         panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
         panel.standardWindowButton(.zoomButton)?.isHidden = true
-        panel.alphaValue = 0
+        panel.alphaValue = 1
         let hostingView = NSHostingView(rootView: ContentView(panelState: panelState))
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = NSColor.clear.cgColor
@@ -74,6 +75,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         islandPanel = panel
+        // The pill is the notch — keep it on screen at all times so the
+        // resting state visually replaces the real notch instead of popping in.
+        panel.orderFrontRegardless()
         startMouseTracking()
     }
 
@@ -100,37 +104,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         positionPanel(panel, on: screen, size: panelSize)
 
         let activationZone = activationRect(for: screen, panelSize: panelSize)
-        let shouldShowPanel = activationZone.contains(mouseLocation) || panel.frame.contains(mouseLocation)
-        panelState.isInteractionActive = shouldShowPanel
-
-        guard shouldShowPanel != isPanelVisible else { return }
-        isPanelVisible = shouldShowPanel
-
-        if shouldShowPanel {
-            showPanel(panel)
-        } else {
-            hidePanel(panel)
-        }
-    }
-
-    private func showPanel(_ panel: NSPanel) {
-        panel.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            panel.animator().alphaValue = 1
-        }
-    }
-
-    private func hidePanel(_ panel: NSPanel) {
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.22
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            panel.animator().alphaValue = 0
-        }, completionHandler: { [weak self, weak panel] in
-            guard let self, let panel, !self.isPanelVisible else { return }
-            panel.orderOut(nil)
-        })
+        let shouldExpand = activationZone.contains(mouseLocation) || panel.frame.contains(mouseLocation)
+        panelState.isInteractionActive = shouldExpand
     }
 
     private func positionPanel(_ panel: NSPanel, on screen: NSScreen, size: NSSize) {
@@ -140,6 +115,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             y: metrics.panelOriginY
         )
         panel.setFrameOrigin(origin)
+
+        // Surface the detected notch silhouette so the resting pill in
+        // ContentView can match the system geometry exactly.
+        let detected = CGSize(width: metrics.notchWidth, height: metrics.bandHeight)
+        if panelState.collapsedSize != detected {
+            panelState.collapsedSize = detected
+        }
     }
 
     private func activationRect(for screen: NSScreen, panelSize: NSSize) -> NSRect {
@@ -166,10 +148,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let midpointX = notchRegion.midpointX
         let bandMinY = frame.maxY - bandHeight
 
-        // Keep the collapsed fake notch vertically centered in the top reserved band,
-        // while letting the expanded state grow downward from the same top anchor.
-        let panelTopY = bandMinY + (bandHeight + collapsedNotchHeight) / 2
-        let panelOriginY = panelTopY - panelSize.height + visualOffsetY
+        // Anchor the panel's top edge directly to the screen's top edge so the
+        // collapsed pill sits inside the real notch reserve on notch Macs and
+        // flush against the menu bar top on non-notch Macs. The shape grows
+        // downward from this fixed top anchor on hover.
+        let panelTopY = frame.maxY
+        let panelOriginY = panelTopY - panelSize.height
 
         return NotchMetrics(
             midpointX: midpointX,

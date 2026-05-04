@@ -6,8 +6,12 @@ struct ContentView: View {
     @State private var isHoveringIsland = false
     @State private var expansionProgress: CGFloat = 0
 
-    private let collapsedWidth: CGFloat = 292
-    private let collapsedHeight: CGFloat = 25
+    // The collapsed dimensions come from the detected notch silhouette so the
+    // resting pill perfectly overlaps the real notch (or the menu bar on
+    // non-notch Macs). Falls back to the published default until a real value
+    // is reported.
+    private var collapsedWidth: CGFloat { panelState.collapsedSize.width }
+    private var collapsedHeight: CGFloat { panelState.collapsedSize.height }
     private let expandedWidth: CGFloat = 300
     private let expandedHeight: CGFloat = 104
     private let hoverInAnimation = Animation.linear(duration: 0.22)
