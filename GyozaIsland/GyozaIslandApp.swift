@@ -38,7 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var islandPanel: NSPanel?
-    private var mouseTrackingTimer: Timer?
+    private var globalMouseMonitor: Any?
+    private var localMouseMonitor: Any?
     private let panelState = IslandPanelState()
     private let panelSize = NSSize(width: 320, height: 132)
     private let collapsedNotchHeight: CGFloat = 32
@@ -82,15 +83,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        mouseTrackingTimer?.invalidate()
-        mouseTrackingTimer = nil
+        if let monitor = globalMouseMonitor {
+            NSEvent.removeMonitor(monitor)
+            globalMouseMonitor = nil
+        }
+        if let monitor = localMouseMonitor {
+            NSEvent.removeMonitor(monitor)
+            localMouseMonitor = nil
+        }
     }
 
+    /// Drive hover detection from real mouse-moved events instead of polling.
+    /// Fires only when the cursor actually moves, so the app sleeps when idle
+    /// and reacts within a single event tick when it doesn't.
     private func startMouseTracking() {
-        mouseTrackingTimer = Timer.scheduledTimer(withTimeInterval: 1 / 30, repeats: true) { [weak self] _ in
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
             self?.updatePanelVisibility()
         }
-        RunLoop.main.add(mouseTrackingTimer!, forMode: .common)
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
+            self?.updatePanelVisibility()
+            return event
+        }
+        // Run once on startup so the panel is positioned correctly before the
+        // user moves the cursor.
+        updatePanelVisibility()
     }
 
     private func updatePanelVisibility() {
