@@ -135,11 +135,17 @@ private struct IslandShellShape: Shape {
         let rightShoulder = CGPoint(x: topMaxX, y: rect.minY + shoulderDepth)
         let leftShoulder = CGPoint(x: topMinX, y: rect.minY + shoulderDepth)
 
-        // The flare lands at the menu bar's bottom edge. From there the wider
-        // card body extends downward — visually attached to the menu bar.
+        // Land the flare slightly BELOW the menu bar's bottom edge. If the
+        // curve-to-straight-wall transition lines up exactly with the menu
+        // bar boundary, the eye reads the wider portion as a separate card
+        // hanging off the notch — the menu bar's hard bottom edge competes
+        // with the silhouette's inflection point at the same Y.
+        // Crossing the boundary while still curving makes the shape read as
+        // a single object that drips out of the menu bar.
         // Falls back to zero when collapsed so the resting silhouette is
         // unchanged.
-        let flareEndY = max(shoulderDepth, bandHeight)
+        let flareOvershoot: CGFloat = 14
+        let flareEndY = max(shoulderDepth, bandHeight + flareOvershoot)
         let flareDepth = lerp(0, flareEndY - shoulderDepth, p)
         let rightFlareEnd = CGPoint(x: rect.maxX, y: rect.minY + shoulderDepth + flareDepth)
         let leftFlareEnd = CGPoint(x: rect.minX, y: rect.minY + shoulderDepth + flareDepth)
