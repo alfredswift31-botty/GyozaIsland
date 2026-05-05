@@ -10,8 +10,11 @@ import AppKit
 import QuartzCore
 import Combine
 
+private let filenamesPasteboardType = NSPasteboard.PasteboardType("NSFilenamesPboardType")
+
 final class IslandPanelState: ObservableObject {
     @Published var isInteractionActive = false
+    @Published var isFileDragActive = false
     /// Detected size of the real notch (or menu-bar-thickness fallback) so the
     /// resting pill can match the system silhouette exactly.
     @Published var collapsedSize: CGSize = CGSize(width: 200, height: 32)
@@ -73,7 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
         panel.standardWindowButton(.zoomButton)?.isHidden = true
         panel.alphaValue = 1
-        let hostingView = NSHostingView(rootView: ContentView(panelState: panelState))
+        let hostingView = DragAwareHostingView(rootView: ContentView(panelState: panelState), panelState: panelState)
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = NSColor.clear.cgColor
         hostingView.layer?.masksToBounds = false
@@ -218,5 +221,91 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func screen(containing point: NSPoint) -> NSScreen? {
         NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
+    }
+}
+
+final class DragAwareHostingView<Content: View>: NSHostingView<Content> {
+    private weak var panelState: IslandPanelState?
+
+    init(rootView: Content, panelState: IslandPanelState) {
+        self.panelState = panelState
+        super.init(rootView: rootView)
+        registerForDraggedTypes([.fileURL, .URL, filenamesPasteboardType])
+    }
+
+    required init(rootView: Content) {
+        super.init(rootView: rootView)
+        registerForDraggedTypes([.fileURL, .URL, filenamesPasteboardType])
+    }
+
+    @available(*, unavailable)
+    @MainActor dynamic required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard hasFileURLs(sender.draggingPasteboard) else {
+            return []
+        }
+
+        panelState?.isFileDragActive = true
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard hasFileURLs(sender.draggingPasteboard) else {
+            return []
+        }
+
+        panelState?.isFileDragActive = true
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        panelState?.isFileDragActive = false
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        panelState?.isFileDragActive = false
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = fileURLs(from: sender.draggingPasteboard)
+        panelState?.isFileDragActive = false
+
+        guard !urls.isEmpty else {
+            return false
+        }
+
+        sendViaAirDrop(urls)
+        return true
+    }
+
+    private func hasFileURLs(_ pasteboard: NSPasteboard) -> Bool {
+        !fileURLs(from: pasteboard).isEmpty
+    }
+
+    private func fileURLs(from pasteboard: NSPasteboard) -> [URL] {
+        if let urls = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL],
+           !urls.isEmpty {
+            return urls
+        }
+
+        if let paths = pasteboard.propertyList(forType: filenamesPasteboardType) as? [String] {
+            return paths.map(URL.init(fileURLWithPath:))
+        }
+
+        return []
+    }
+
+    private func sendViaAirDrop(_ urls: [URL]) {
+        guard let service = NSSharingService(named: .sendViaAirDrop) else {
+            return
+        }
+
+        service.perform(withItems: urls)
     }
 }
