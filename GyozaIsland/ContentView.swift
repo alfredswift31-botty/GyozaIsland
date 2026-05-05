@@ -3,9 +3,9 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var panelState: IslandPanelState
+    @StateObject private var musicController = MusicController()
     @State private var isHoveringIsland = false
     @State private var expansionProgress: CGFloat = 0
-    @State private var isPlaying = false
 
     // The collapsed dimensions come from the detected notch silhouette so the
     // resting pill perfectly overlaps the real notch (or the menu bar on
@@ -13,8 +13,8 @@ struct ContentView: View {
     // is reported.
     private var collapsedWidth: CGFloat { panelState.collapsedSize.width }
     private var collapsedHeight: CGFloat { panelState.collapsedSize.height }
-    private let expandedWidth: CGFloat = 320
-    private let expandedHeight: CGFloat = 110
+    private let expandedWidth: CGFloat = 360
+    private let expandedHeight: CGFloat = 126
     // Spring physics give the Apple-like bounce-then-settle feel. Lower
     // damping on hover-in for a small overshoot; higher damping on hover-out
     // so the pill returns to the notch without jiggle.
@@ -32,7 +32,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             island
-                .frame(width: 320, height: 124, alignment: .top)
+                .frame(width: 360, height: 140, alignment: .top)
                 .padding(.top, 0)
                 .padding(.horizontal, 10)
                 .padding(.bottom, 6)
@@ -43,10 +43,14 @@ struct ContentView: View {
         .background(Color.clear)
         .onAppear {
             expansionProgress = isExpandedTarget ? 1 : 0
+            musicController.refreshNowPlaying()
         }
         .onChange(of: isExpandedTarget) { _, newValue in
             withAnimation(newValue ? hoverInAnimation : hoverOutAnimation) {
                 expansionProgress = newValue ? 1 : 0
+            }
+            if newValue {
+                musicController.refreshNowPlaying()
             }
         }
     }
@@ -97,32 +101,42 @@ struct ContentView: View {
 
     private var mediaContent: some View {
         HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Gyoza Radio")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
+            albumPlaceholder
 
-                Text("Now playing")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.62))
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 11) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(musicController.trackTitle)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
 
-            HStack(spacing: 10) {
-                mediaButton(systemName: "backward.fill", size: 12) {}
-
-                mediaButton(systemName: isPlaying ? "pause.fill" : "play.fill", size: 16) {
-                    isPlaying.toggle()
+                    Text(musicController.trackSubtitle)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.62))
+                        .lineLimit(1)
                 }
-                .frame(width: 36, height: 36)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                mediaButton(systemName: "forward.fill", size: 12) {}
+                HStack(spacing: 12) {
+                    mediaButton(systemName: "backward.fill", size: 12) {
+                        musicController.previousTrack()
+                    }
+
+                    mediaButton(systemName: musicController.prefersPauseIcon ? "pause.fill" : "play.fill", size: 17) {
+                        musicController.togglePlayPause()
+                    }
+                    .frame(width: 40, height: 40)
+
+                    mediaButton(systemName: "forward.fill", size: 12) {
+                        musicController.nextTrack()
+                    }
+
+                    Spacer(minLength: 0)
+                }
             }
         }
-        .padding(.top, 34)
-        .padding(.horizontal, 22)
+        .padding(.top, 38)
+        .padding(.horizontal, 24)
         .opacity(contentProgress)
         .scaleEffect(lerp(0.98, 1, contentProgress), anchor: .center)
         .clipShape(IslandShellShape(progress: bodyProgress))
@@ -134,10 +148,30 @@ struct ContentView: View {
             Image(systemName: systemName)
                 .font(.system(size: size, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 30, height: 30)
+                .frame(width: 34, height: 34)
                 .background(.white.opacity(0.12), in: Circle())
         }
         .buttonStyle(.plain)
+    }
+
+    private var albumPlaceholder: some View {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.20),
+                        Color.white.opacity(0.07)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay {
+                Image(systemName: "music.note")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.72))
+            }
+            .frame(width: 58, height: 58)
     }
 }
 
@@ -156,7 +190,7 @@ private struct IslandShellShape: Shape {
         // the screen/menu bar without exposing the background at the corners.
         // Bottom corners stay large for the expanded card feel.
         let topRadius = lerp(6, 0, p)
-        let bottomRadius = lerp(8, 30, p)
+        let bottomRadius = lerp(8, 36, p)
 
         return Path { path in
             path.move(to: CGPoint(x: rect.minX + topRadius, y: rect.minY))

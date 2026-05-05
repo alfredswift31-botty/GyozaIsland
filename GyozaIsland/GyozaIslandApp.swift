@@ -45,7 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
     private let panelState = IslandPanelState()
-    private let panelSize = NSSize(width: 320, height: 132)
+    private let panelSize = NSSize(width: 380, height: 148)
     private let collapsedNotchHeight: CGFloat = 32
 
     func applicationDidFinishLaunching(_ notification: Notification) {
