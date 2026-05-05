@@ -10,8 +10,12 @@ final class MusicController: ObservableObject {
     @Published private(set) var artworkImage: NSImage?
 
     func togglePlayPause() {
+        guard musicIsRunning else {
+            showMusicClosedMessage()
+            return
+        }
+
         prefersPauseIcon.toggle()
-        openMusicIfNeeded()
         runCommand(
             """
             tell application id "com.apple.Music" to playpause
@@ -21,7 +25,11 @@ final class MusicController: ObservableObject {
     }
 
     func nextTrack() {
-        openMusicIfNeeded()
+        guard musicIsRunning else {
+            showMusicClosedMessage()
+            return
+        }
+
         runCommand(
             """
             tell application id "com.apple.Music" to next track
@@ -31,7 +39,11 @@ final class MusicController: ObservableObject {
     }
 
     func previousTrack() {
-        openMusicIfNeeded()
+        guard musicIsRunning else {
+            showMusicClosedMessage()
+            return
+        }
+
         runCommand(
             """
             tell application id "com.apple.Music" to previous track
@@ -161,18 +173,25 @@ final class MusicController: ObservableObject {
         }
     }
 
-    private func openMusicIfNeeded() {
-        guard NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Music").isEmpty else {
-            return
-        }
-
+    func openMusicApp(activates: Bool = true) {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Music") else {
             return
         }
 
         let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = false
+        configuration.activates = activates
         NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+    }
+
+    private var musicIsRunning: Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Music").isEmpty
+    }
+
+    private func showMusicClosedMessage() {
+        prefersPauseIcon = false
+        trackTitle = "Apple Music"
+        trackSubtitle = "Click artwork to open Music"
+        artworkImage = nil
     }
 }
 

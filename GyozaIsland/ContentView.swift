@@ -13,7 +13,7 @@ struct ContentView: View {
     // is reported.
     private var collapsedWidth: CGFloat { panelState.collapsedSize.width }
     private var collapsedHeight: CGFloat { panelState.collapsedSize.height }
-    private let expandedWidth: CGFloat = 390
+    private let expandedWidth: CGFloat = 430
     private let expandedHeight: CGFloat = 150
     // Spring physics give the Apple-like bounce-then-settle feel. Lower
     // damping on hover-in for a small overshoot; higher damping on hover-out
@@ -32,7 +32,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             island
-                .frame(width: 390, height: 164, alignment: .top)
+                .frame(width: 430, height: 164, alignment: .top)
                 .padding(.top, 0)
                 .padding(.horizontal, 10)
                 .padding(.bottom, 6)
@@ -111,7 +111,12 @@ struct ContentView: View {
 
     private var mediaContent: some View {
         HStack(alignment: .center, spacing: 18) {
-            albumArtwork
+            Button {
+                musicController.openMusicApp()
+            } label: {
+                albumArtwork
+            }
+            .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 10) {
                 VStack(alignment: .leading, spacing: 3) {
@@ -147,6 +152,8 @@ struct ContentView: View {
                     Spacer(minLength: 0)
                 }
             }
+
+            airDropButton
         }
         .padding(.top, 38)
         .padding(.horizontal, 30)
@@ -162,6 +169,23 @@ struct ContentView: View {
                 .foregroundStyle(.white)
                 .frame(width: buttonSize, height: buttonSize)
                 .background(.white.opacity(0.13), in: Circle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var airDropButton: some View {
+        Button {
+            openAirDrop()
+        } label: {
+            VStack(spacing: 6) {
+                Image(systemName: "airdrop")
+                    .font(.system(size: 20, weight: .semibold))
+                Text("AirDrop")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .frame(width: 58, height: 58)
+            .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -193,6 +217,13 @@ struct ContentView: View {
         }
         .frame(width: 72, height: 72)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func openAirDrop() {
+        let airDropURL = URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app/Contents/Applications/AirDrop.app")
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.openApplication(at: airDropURL, configuration: configuration)
     }
 }
 
