@@ -102,12 +102,11 @@ private struct IslandShellShape: Shape {
 
     func path(in rect: CGRect) -> Path {
         let p = min(max(progress, 0), 1)
-        // Uniform rounded rectangle. Top corners stay small (matching the
-        // notch's outer corner radius at rest) and grow only modestly with
-        // expansion. Bottom corners grow more dramatically for an Apple-like
-        // expanded card. Top edge always spans the full rect width and sits
-        // exactly at rect.minY, so the shape is welded to the screen top.
-        let topRadius = lerp(4, 8, p)
+        // Keep the collapsed notch softly rounded, then flatten the top
+        // corners as the island expands so the top edge visually attaches to
+        // the screen/menu bar without exposing the background at the corners.
+        // Bottom corners stay large for the expanded card feel.
+        let topRadius = lerp(6, 0, p)
         let bottomRadius = lerp(8, 28, p)
 
         return Path { path in
