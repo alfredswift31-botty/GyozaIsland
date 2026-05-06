@@ -52,7 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let swipeScrollMultiplier: CGFloat = 2.6
     private let swipeTriggerThreshold: CGFloat = 22
     private let panelState = IslandPanelState()
-    private let panelSize = NSSize(width: 450, height: 172)
+    private let panelSize = NSSize(width: 450, height: 186)
     private let collapsedNotchHeight: CGFloat = 32
 
     func applicationDidFinishLaunching(_ notification: Notification) {

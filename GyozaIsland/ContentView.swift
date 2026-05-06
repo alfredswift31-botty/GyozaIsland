@@ -6,6 +6,8 @@ struct ContentView: View {
     @StateObject private var musicController = MusicController()
     @State private var expansionProgress: CGFloat = 0
     @State private var currentPage: Int = 0
+    @State private var isScrubbingPlayback = false
+    @State private var scrubberPosition: Double = 0
     // Actual HStack offset in points. Animating this CGFloat directly gives a
     // smooth slide — changing Int currentPage inside withAnimation causes an
     // instant 430pt jump followed by a partial spring, which feels like a stutter.
@@ -18,7 +20,7 @@ struct ContentView: View {
     private var collapsedWidth: CGFloat { panelState.collapsedSize.width }
     private var collapsedHeight: CGFloat { panelState.collapsedSize.height }
     private let expandedWidth: CGFloat = 430
-    private let expandedHeight: CGFloat = 150
+    private let expandedHeight: CGFloat = 164
     // Spring physics give the Apple-like bounce-then-settle feel. Lower
     // damping on hover-in for a small overshoot; higher damping on hover-out
     // so the pill returns to the notch without jiggle.
@@ -39,7 +41,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             island
-                .frame(width: 430, height: 164, alignment: .top)
+                .frame(width: expandedWidth, height: expandedHeight + 14, alignment: .top)
                 .padding(.top, 0)
                 .padding(.horizontal, 10)
                 .padding(.bottom, 6)
@@ -125,17 +127,6 @@ struct ContentView: View {
             .frame(height: expandedHeight)
             .allowsHitTesting(false)
         }
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 8, coordinateSpace: .local)
-                .onEnded { value in
-                    guard contentProgress > 0.95 else { return }
-                    commitDragSwipe(
-                        translation: value.translation.width,
-                        predictedTranslation: value.predictedEndTranslation.width,
-                        source: "drag"
-                    )
-                }
-        )
         .opacity(contentProgress)
         .scaleEffect(lerp(0.98, 1, contentProgress), anchor: .center)
         .allowsHitTesting(contentProgress > 0.95)
@@ -165,44 +156,6 @@ struct ContentView: View {
             translation: CGFloat(direction),
             predictedTranslation: CGFloat(direction),
             direction: direction < 0 ? "left" : direction > 0 ? "right" : "none"
-        )
-    }
-
-    private func commitDragSwipe(translation: CGFloat, predictedTranslation: CGFloat, source: String) {
-        let pageBefore = currentPage
-        let targetPage: Int
-        let direction: String
-
-        if currentPage == 0,
-           translation < -pageSwipeThreshold || predictedTranslation < -pageVelocityThreshold {
-            targetPage = 1
-            direction = "left"
-        } else if currentPage == 1,
-                  translation > pageSwipeThreshold || predictedTranslation > pageVelocityThreshold {
-            targetPage = 0
-            direction = "right"
-        } else {
-            targetPage = currentPage
-            direction = "snap-back"
-        }
-
-        print(
-            "[GyozaIsland] drag swipe decision",
-            "from=\(pageBefore)",
-            "translation=\(translation)",
-            "predicted=\(predictedTranslation)",
-            "threshold=\(pageSwipeThreshold)",
-            "velocityThreshold=\(pageVelocityThreshold)",
-            "direction=\(direction)",
-            "target=\(targetPage)"
-        )
-
-        snapToPage(
-            targetPage,
-            source: source,
-            translation: translation,
-            predictedTranslation: predictedTranslation,
-            direction: direction
         )
     }
 
@@ -276,7 +229,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
 
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 6) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(musicController.trackTitle)
                         .font(.system(size: 16, weight: .semibold))
@@ -309,12 +262,66 @@ struct ContentView: View {
 
                     Spacer(minLength: 0)
                 }
+
+                mediaScrubber
             }
 
             airDropButton
         }
-        .padding(.top, 29)
+        .padding(.top, 24)
         .padding(.horizontal, 30)
+    }
+
+    private var mediaScrubber: some View {
+        GeometryReader { proxy in
+            let width = max(proxy.size.width, 1)
+            let duration = musicController.playbackDuration
+            let position = isScrubbingPlayback ? scrubberPosition : musicController.playbackPosition
+            let progress = duration > 0 ? min(max(position / duration, 0), 1) : 0
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.16))
+                    .frame(height: 4)
+
+                Capsule()
+                    .fill(Color.white.opacity(duration > 0 ? 0.72 : 0.28))
+                    .frame(width: max(4, width * progress), height: 4)
+
+                Circle()
+                    .fill(Color.white.opacity(0.92))
+                    .frame(width: 8, height: 8)
+                    .offset(x: min(max(width * progress - 4, 0), width - 8))
+                    .opacity(duration > 0 ? 1 : 0)
+            }
+            .frame(maxHeight: .infinity, alignment: .center)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { value in
+                        updateScrubber(locationX: value.location.x, width: width, shouldSeek: false)
+                    }
+                    .onEnded { value in
+                        updateScrubber(locationX: value.location.x, width: width, shouldSeek: true)
+                    }
+            )
+        }
+        .frame(height: 12)
+        .opacity(musicController.playbackDuration > 0 ? 1 : 0.45)
+    }
+
+    private func updateScrubber(locationX: CGFloat, width: CGFloat, shouldSeek: Bool) {
+        guard musicController.playbackDuration > 0, width > 0 else { return }
+
+        let progress = min(max(locationX / width, 0), 1)
+        let position = Double(progress) * musicController.playbackDuration
+        isScrubbingPlayback = true
+        scrubberPosition = position
+
+        if shouldSeek {
+            isScrubbingPlayback = false
+            musicController.seek(to: position)
+        }
     }
 
     private func mediaButton(systemName: String, symbolSize: CGFloat, buttonSize: CGFloat, action: @escaping () -> Void) -> some View {
@@ -422,7 +429,7 @@ private struct IslandShellShape: Shape {
         // the screen/menu bar without exposing the background at the corners.
         // Bottom corners stay large for the expanded card feel.
         let topRadius = lerp(6, 0, p)
-        let bottomRadius = lerp(8, 44, p)
+        let bottomRadius = lerp(8, 48, p)
 
         return Path { path in
             path.move(to: CGPoint(x: rect.minX + topRadius, y: rect.minY))

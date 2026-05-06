@@ -8,6 +8,20 @@ final class MusicController: ObservableObject {
     @Published private(set) var trackTitle = "Apple Music"
     @Published private(set) var trackSubtitle = "Ready to play"
     @Published private(set) var artworkImage: NSImage?
+    @Published private(set) var playbackPosition: Double = 0
+    @Published private(set) var playbackDuration: Double = 0
+
+    private var progressTimer: AnyCancellable?
+    private var progressRefreshTick = 0
+
+    init() {
+        progressTimer = Timer
+            .publish(every: 1, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                self?.tickPlaybackProgress()
+            }
+    }
 
     func togglePlayPause() {
         guard musicIsRunning else {
@@ -52,11 +66,27 @@ final class MusicController: ObservableObject {
         )
     }
 
+    func seek(to position: Double) {
+        guard musicIsRunning, playbackDuration > 0 else {
+            showMusicClosedMessage()
+            return
+        }
+
+        let safePosition = min(max(position, 0), playbackDuration)
+        playbackPosition = safePosition
+        runCommand(
+            """
+            tell application id "com.apple.Music" to set player position to \(String(format: "%.3f", safePosition))
+            """,
+            label: "seek"
+        )
+    }
+
     func refreshNowPlaying() {
         runInfoScript(
             """
             if application id "com.apple.Music" is not running then
-                return "stopped" & linefeed & "Apple Music" & linefeed & "Not playing"
+                return "stopped" & linefeed & "Apple Music" & linefeed & "Not playing" & linefeed & "" & linefeed & "0" & linefeed & "0"
             end if
 
             set artworkPath to POSIX path of (path to temporary items) & "gyoza-island-current-artwork"
@@ -65,11 +95,13 @@ final class MusicController: ObservableObject {
                 set playbackState to player state as string
 
                 if playbackState is "stopped" then
-                    return playbackState & linefeed & "Apple Music" & linefeed & "Not playing"
+                    return playbackState & linefeed & "Apple Music" & linefeed & "Not playing" & linefeed & "" & linefeed & "0" & linefeed & "0"
                 end if
 
                 set trackName to ""
                 set artistName to ""
+                set trackPosition to 0
+                set trackDuration to 0
 
                 try
                     set trackName to name of current track
@@ -88,6 +120,14 @@ final class MusicController: ObservableObject {
                 if trackName is "" then set trackName to "Apple Music"
                 if artistName is "" then set artistName to playbackState
 
+                try
+                    set trackPosition to player position
+                end try
+
+                try
+                    set trackDuration to duration of current track
+                end try
+
                 set artworkResult to ""
                 try
                     if (count of artworks of current track) > 0 then
@@ -105,7 +145,7 @@ final class MusicController: ObservableObject {
                     set artworkResult to ""
                 end try
 
-                return playbackState & linefeed & trackName & linefeed & artistName & linefeed & artworkResult
+                return playbackState & linefeed & trackName & linefeed & artistName & linefeed & artworkResult & linefeed & trackPosition & linefeed & trackDuration
             end tell
             """,
             label: "now playing"
@@ -148,11 +188,15 @@ final class MusicController: ObservableObject {
         let title = lines.dropFirst().first ?? "Apple Music"
         let subtitle = lines.dropFirst(2).first ?? "Not playing"
         let artworkPath = lines.dropFirst(3).first ?? ""
+        let position = Double(lines.dropFirst(4).first ?? "") ?? 0
+        let duration = Double(lines.dropFirst(5).first ?? "") ?? 0
 
         prefersPauseIcon = playbackState == "playing"
         trackTitle = title.isEmpty ? "Apple Music" : title
         trackSubtitle = subtitle.isEmpty ? playbackState.capitalized : subtitle
         artworkImage = artworkPath.isEmpty ? nil : NSImage(contentsOfFile: artworkPath)
+        playbackPosition = min(max(position, 0), max(duration, 0))
+        playbackDuration = max(duration, 0)
     }
 
     private func applyAppleScriptError(_ error: NSDictionary, label: String) {
@@ -164,6 +208,8 @@ final class MusicController: ObservableObject {
         prefersPauseIcon = false
         trackTitle = "Apple Music"
         artworkImage = nil
+        playbackPosition = 0
+        playbackDuration = 0
         if let number, let message {
             trackSubtitle = "Music control failed (\(number)): \(message)"
         } else if let message {
@@ -187,11 +233,30 @@ final class MusicController: ObservableObject {
         !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Music").isEmpty
     }
 
+    private func tickPlaybackProgress() {
+        guard prefersPauseIcon else {
+            progressRefreshTick = 0
+            return
+        }
+
+        if playbackDuration > 0 {
+            playbackPosition = min(playbackPosition + 1, playbackDuration)
+        }
+
+        progressRefreshTick += 1
+        if progressRefreshTick >= 5 {
+            progressRefreshTick = 0
+            refreshNowPlaying()
+        }
+    }
+
     private func showMusicClosedMessage() {
         prefersPauseIcon = false
         trackTitle = "Apple Music"
         trackSubtitle = "Click artwork to open Music"
         artworkImage = nil
+        playbackPosition = 0
+        playbackDuration = 0
     }
 }
 
