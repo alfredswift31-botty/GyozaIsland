@@ -186,12 +186,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func activationRect(for screen: NSScreen, panelSize: NSSize) -> NSRect {
         let metrics = notchMetrics(for: screen, panelSize: panelSize)
-        let width = max(panelSize.width + 72, metrics.notchWidth + 72, 260)
-        let height = metrics.bandHeight + 18
+        // Keep the zone tight to the actual notch so the card only opens when
+        // the cursor is near the notch, not anywhere along the menu bar.
+        let width = metrics.notchWidth + 24
+        let height = metrics.bandHeight + 6
 
         return NSRect(
             x: metrics.midpointX - width / 2,
-            y: metrics.bandMinY - 12,
+            y: metrics.bandMinY - 6,
             width: width,
             height: height
         )

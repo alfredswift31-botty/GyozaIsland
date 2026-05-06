@@ -97,26 +97,31 @@ struct ContentView: View {
     }
 
     private var pagedContent: some View {
-        ZStack(alignment: .bottom) {
+        // Top alignment matches the original mediaContent placement — content
+        // starts at padding(.top, 38) from the island top, same as before.
+        ZStack(alignment: .top) {
             HStack(spacing: 0) {
                 page0Content
                     .frame(width: expandedWidth)
                 page1Content
                     .frame(width: expandedWidth)
             }
-            // alignment: .leading pins the 860pt HStack's leading edge to the
-            // frame's leading edge instead of centering it, so page 0 is visible
-            // at rest and page 1 slides in from the right on swipe.
             .frame(width: expandedWidth, alignment: .leading)
             .offset(x: -(CGFloat(currentPage) * expandedWidth) + pageDragOffset)
 
-            pageIndicator
-                .padding(.bottom, 10)
-                .opacity(contentProgress)
-                .allowsHitTesting(false)
+            // Indicator pushed to bottom via Spacer so it doesn't affect the
+            // top-aligned content position.
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                pageIndicator
+                    .padding(.bottom, 10)
+                    .opacity(contentProgress)
+            }
+            .frame(height: expandedHeight)
+            .allowsHitTesting(false)
         }
         .simultaneousGesture(
-            DragGesture(minimumDistance: 15, coordinateSpace: .local)
+            DragGesture(minimumDistance: 8, coordinateSpace: .local)
                 .onChanged { value in
                     guard contentProgress > 0.95 else { return }
                     let raw = value.translation.width
@@ -128,11 +133,12 @@ struct ContentView: View {
                 }
                 .onEnded { value in
                     guard contentProgress > 0.95 else { return }
+                    let translation = value.translation.width
                     let predicted = value.predictedEndTranslation.width
                     withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
-                        if predicted < -60 && currentPage < 1 {
+                        if (translation < -25 || predicted < -50) && currentPage < 1 {
                             currentPage = 1
-                        } else if predicted > 60 && currentPage > 0 {
+                        } else if (translation > 25 || predicted > 50) && currentPage > 0 {
                             currentPage = 0
                         }
                         pageDragOffset = 0
