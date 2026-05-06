@@ -104,6 +104,10 @@ struct ContentView: View {
                 page1Content
                     .frame(width: expandedWidth)
             }
+            // alignment: .leading pins the 860pt HStack's leading edge to the
+            // frame's leading edge instead of centering it, so page 0 is visible
+            // at rest and page 1 slides in from the right on swipe.
+            .frame(width: expandedWidth, alignment: .leading)
             .offset(x: -(CGFloat(currentPage) * expandedWidth) + pageDragOffset)
 
             pageIndicator
@@ -111,11 +115,6 @@ struct ContentView: View {
                 .opacity(contentProgress)
                 .allowsHitTesting(false)
         }
-        // Fix 1: bound the ZStack so it stays 430pt wide — without this the HStack
-        // (2×430 = 860pt) inflates the ZStack and pushes the indicator off-screen.
-        .frame(width: expandedWidth, height: expandedHeight)
-        // Fix 2: simultaneousGesture lets child buttons still fire on click;
-        // plain .gesture() competes and wins, silently swallowing button taps.
         .simultaneousGesture(
             DragGesture(minimumDistance: 15, coordinateSpace: .local)
                 .onChanged { value in
