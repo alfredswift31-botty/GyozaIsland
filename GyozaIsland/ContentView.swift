@@ -4,7 +4,6 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var panelState: IslandPanelState
     @StateObject private var musicController = MusicController()
-    @State private var isHoveringIsland = false
     @State private var expansionProgress: CGFloat = 0
     @State private var currentPage: Int = 0
     // Actual HStack offset in points. Animating this CGFloat directly gives a
@@ -25,6 +24,9 @@ struct ContentView: View {
     // so the pill returns to the notch without jiggle.
     private let hoverInAnimation = Animation.spring(response: 0.42, dampingFraction: 0.78)
     private let hoverOutAnimation = Animation.spring(response: 0.50, dampingFraction: 0.92)
+    private let pageSnapAnimation = Animation.spring(response: 0.28, dampingFraction: 0.88)
+    private var pageSwipeThreshold: CGFloat { expandedWidth * 0.16 }
+    private var pageVelocityThreshold: CGFloat { expandedWidth * 0.26 }
 
     private var isExpandedTarget: Bool {
         panelState.isInteractionActive || panelState.isFileDragActive
@@ -64,36 +66,12 @@ struct ContentView: View {
                 }
             }
         }
-        // Live visual feedback while the user is swiping.
-        .onChange(of: panelState.pageSwipeAccum) { _, accum in
+        .onChange(of: panelState.pageSwipeTrigger) { _, _ in
             guard contentProgress > 0.95 else { return }
-            let base = -(CGFloat(currentPage) * expandedWidth)
-            let candidate = base + accum
-            // Rubber band when dragging past the first or last page.
-            if candidate > 0 {
-                pageOffset = candidate * 0.25
-            } else if candidate < -expandedWidth {
-                pageOffset = -expandedWidth + (candidate + expandedWidth) * 0.25
-            } else {
-                pageOffset = candidate
-            }
-        }
-        // Finger lifted — commit or snap back with a full spring from current pos.
-        .onChange(of: panelState.pageSwipeCommit) { _, _ in
-            let base = -(CGFloat(currentPage) * expandedWidth)
-            let displacement = pageOffset - base
-            let newPage: Int
-            if displacement < -25 && currentPage < 1 {
-                newPage = 1
-            } else if displacement > 25 && currentPage > 0 {
-                newPage = 0
-            } else {
-                newPage = currentPage
-            }
-            currentPage = newPage
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                pageOffset = -(CGFloat(newPage) * expandedWidth)
-            }
+            commitTriggeredSwipe(
+                direction: panelState.pageSwipeDirection,
+                source: "scroll"
+            )
         }
     }
 
@@ -112,12 +90,7 @@ struct ContentView: View {
         }
         .foregroundColor(.white)
         .frame(width: islandWidth, height: islandHeight, alignment: .top)
-        // contentShape and onHover must sit on the correctly-sized frame so
-        // the hover zone matches the actual pill/card, not the full panel area.
         .contentShape(IslandShellShape(progress: bodyProgress))
-        .onHover { isHovering in
-            if isHovering != isHoveringIsland { isHoveringIsland = isHovering }
-        }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
@@ -154,35 +127,13 @@ struct ContentView: View {
         }
         .simultaneousGesture(
             DragGesture(minimumDistance: 8, coordinateSpace: .local)
-                .onChanged { value in
-                    guard contentProgress > 0.95 else { return }
-                    let base = -(CGFloat(currentPage) * expandedWidth)
-                    let candidate = base + value.translation.width
-                    if candidate > 0 {
-                        pageOffset = candidate * 0.25
-                    } else if candidate < -expandedWidth {
-                        pageOffset = -expandedWidth + (candidate + expandedWidth) * 0.25
-                    } else {
-                        pageOffset = candidate
-                    }
-                }
                 .onEnded { value in
                     guard contentProgress > 0.95 else { return }
-                    let base = -(CGFloat(currentPage) * expandedWidth)
-                    let displacement = pageOffset - base
-                    let predicted = value.predictedEndTranslation.width
-                    let newPage: Int
-                    if (displacement < -25 || predicted < -50) && currentPage < 1 {
-                        newPage = 1
-                    } else if (displacement > 25 || predicted > 50) && currentPage > 0 {
-                        newPage = 0
-                    } else {
-                        newPage = currentPage
-                    }
-                    currentPage = newPage
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                        pageOffset = -(CGFloat(newPage) * expandedWidth)
-                    }
+                    commitDragSwipe(
+                        translation: value.translation.width,
+                        predictedTranslation: value.predictedEndTranslation.width,
+                        source: "drag"
+                    )
                 }
         )
         .opacity(contentProgress)
@@ -192,6 +143,96 @@ struct ContentView: View {
 
     private var page1Content: some View {
         Color.clear
+    }
+
+    private func baseOffset(for page: Int) -> CGFloat {
+        -CGFloat(min(max(page, 0), 1)) * expandedWidth
+    }
+
+    private func commitTriggeredSwipe(direction: Int, source: String) {
+        let targetPage: Int
+        if currentPage == 0 && direction < 0 {
+            targetPage = 1
+        } else if currentPage == 1 && direction > 0 {
+            targetPage = 0
+        } else {
+            targetPage = currentPage
+        }
+
+        snapToPage(
+            targetPage,
+            source: source,
+            translation: CGFloat(direction),
+            predictedTranslation: CGFloat(direction),
+            direction: direction < 0 ? "left" : direction > 0 ? "right" : "none"
+        )
+    }
+
+    private func commitDragSwipe(translation: CGFloat, predictedTranslation: CGFloat, source: String) {
+        let pageBefore = currentPage
+        let targetPage: Int
+        let direction: String
+
+        if currentPage == 0,
+           translation < -pageSwipeThreshold || predictedTranslation < -pageVelocityThreshold {
+            targetPage = 1
+            direction = "left"
+        } else if currentPage == 1,
+                  translation > pageSwipeThreshold || predictedTranslation > pageVelocityThreshold {
+            targetPage = 0
+            direction = "right"
+        } else {
+            targetPage = currentPage
+            direction = "snap-back"
+        }
+
+        print(
+            "[GyozaIsland] drag swipe decision",
+            "from=\(pageBefore)",
+            "translation=\(translation)",
+            "predicted=\(predictedTranslation)",
+            "threshold=\(pageSwipeThreshold)",
+            "velocityThreshold=\(pageVelocityThreshold)",
+            "direction=\(direction)",
+            "target=\(targetPage)"
+        )
+
+        snapToPage(
+            targetPage,
+            source: source,
+            translation: translation,
+            predictedTranslation: predictedTranslation,
+            direction: direction
+        )
+    }
+
+    private func snapToPage(
+        _ page: Int,
+        source: String,
+        translation: CGFloat,
+        predictedTranslation: CGFloat,
+        direction: String
+    ) {
+        let pageBefore = currentPage
+        let targetPage = min(max(page, 0), 1)
+        let finalOffset = baseOffset(for: targetPage)
+        print(
+            "[GyozaIsland] page snap",
+            "source=\(source)",
+            "from=\(pageBefore)",
+            "translation=\(translation)",
+            "predicted=\(predictedTranslation)",
+            "threshold=\(pageSwipeThreshold)",
+            "velocityThreshold=\(pageVelocityThreshold)",
+            "direction=\(direction)",
+            "target=\(targetPage)",
+            "finalOffset=\(finalOffset)"
+        )
+
+        withAnimation(pageSnapAnimation) {
+            currentPage = targetPage
+            pageOffset = finalOffset
+        }
     }
 
     private var pageIndicator: some View {
@@ -235,7 +276,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
 
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 7) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(musicController.trackTitle)
                         .font(.system(size: 16, weight: .semibold))
@@ -272,7 +313,7 @@ struct ContentView: View {
 
             airDropButton
         }
-        .padding(.top, 38)
+        .padding(.top, 29)
         .padding(.horizontal, 30)
     }
 

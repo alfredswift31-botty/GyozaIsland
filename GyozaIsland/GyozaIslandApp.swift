@@ -18,11 +18,8 @@ final class IslandPanelState: ObservableObject {
     @Published var isAirDropTargeted = false
     @Published var collapsedSize: CGSize = CGSize(width: 200, height: 32)
     @Published var bandHeight: CGFloat = 37
-    // Live scroll accumulation for page-swipe visual feedback.
-    @Published var pageSwipeAccum: CGFloat = 0
-    // Incremented each time a scroll gesture ends; ContentView observes this
-    // to commit or cancel the pending page change.
-    @Published var pageSwipeCommit: Int = 0
+    @Published var pageSwipeDirection: Int = 0
+    @Published var pageSwipeTrigger: Int = 0
 }
 
 @main
@@ -51,6 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var scrollLocalMonitor: Any?
     private var scrollGlobalMonitor: Any?
     private var swipeAccum: CGFloat = 0
+    private var swipeCommitLocked = false
+    private let swipeScrollMultiplier: CGFloat = 2.6
+    private let swipeTriggerThreshold: CGFloat = 22
     private let panelState = IslandPanelState()
     private let panelSize = NSSize(width: 450, height: 172)
     private let collapsedNotchHeight: CGFloat = 32
@@ -170,25 +170,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               panel.frame.contains(NSEvent.mouseLocation) else {
             if event.phase == .ended || event.phase == .cancelled {
                 swipeAccum = 0
-                panelState.pageSwipeAccum = 0
+                swipeCommitLocked = false
             }
             return
         }
-        // Ignore scrolls that are more vertical than horizontal.
-        guard abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 0.4 else { return }
+        // Page turns should come from intentional horizontal swipes, not
+        // diagonal/vertical scrolling over the island.
+        guard abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) else { return }
 
         switch event.phase {
         case .began:
             swipeAccum = 0
-            panelState.pageSwipeAccum = 0
+            swipeCommitLocked = false
         case .changed:
-            swipeAccum += event.scrollingDeltaX
-            panelState.pageSwipeAccum = swipeAccum
+            guard !swipeCommitLocked else { return }
+            swipeAccum += event.scrollingDeltaX * swipeScrollMultiplier
+            if abs(swipeAccum) > swipeTriggerThreshold {
+                let direction = swipeAccum < 0 ? -1 : 1
+                print(
+                    "[GyozaIsland] scroll swipe trigger",
+                    "accum=\(swipeAccum)",
+                    "threshold=\(swipeTriggerThreshold)",
+                    "direction=\(direction < 0 ? "left" : "right")"
+                )
+                panelState.pageSwipeDirection = direction
+                panelState.pageSwipeTrigger += 1
+                swipeAccum = 0
+                swipeCommitLocked = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                    self?.swipeCommitLocked = false
+                }
+            }
         case .ended, .cancelled:
-            panelState.pageSwipeCommit += 1
             swipeAccum = 0
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
-                self?.panelState.pageSwipeAccum = 0
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.swipeCommitLocked = false
             }
         default:
             break
@@ -214,9 +230,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let shouldExpand = activationZone.contains(mouseLocation)
                         || (alreadyExpanded && panel.frame.contains(mouseLocation))
 
+        if shouldExpand && !alreadyExpanded {
+            print(
+                "[GyozaIsland] hover activation",
+                "rect=(x:\(activationZone.origin.x), y:\(activationZone.origin.y), w:\(activationZone.width), h:\(activationZone.height))",
+                "mouse=(x:\(mouseLocation.x), y:\(mouseLocation.y))"
+            )
+        }
+
         if !shouldExpand {
             swipeAccum = 0
-            panelState.pageSwipeAccum = 0
+            swipeCommitLocked = false
         }
         panelState.isInteractionActive = shouldExpand
     }
@@ -247,13 +271,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func activationRect(for screen: NSScreen, panelSize: NSSize) -> NSRect {
         let metrics = notchMetrics(for: screen, panelSize: panelSize)
-        // Match the real notch dimensions exactly so the card only opens when
-        // the cursor enters the physical notch cutout.
+        // Slightly inset the detected notch dimensions so the island opens
+        // only when the cursor is inside the physical cutout, not merely near
+        // the menu-bar reserve around it.
+        let width = max(metrics.notchWidth - 10, 1)
+        let height = max(metrics.bandHeight - 4, 1)
         return NSRect(
-            x: metrics.midpointX - metrics.notchWidth / 2,
-            y: metrics.bandMinY,
-            width: metrics.notchWidth,
-            height: metrics.bandHeight
+            x: metrics.midpointX - width / 2,
+            y: metrics.bandMinY + 2,
+            width: width,
+            height: height
         )
     }
 
