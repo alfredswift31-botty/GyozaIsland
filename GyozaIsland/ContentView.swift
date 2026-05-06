@@ -6,6 +6,8 @@ struct ContentView: View {
     @StateObject private var musicController = MusicController()
     @State private var isHoveringIsland = false
     @State private var expansionProgress: CGFloat = 0
+    @State private var currentPage: Int = 0
+    @State private var pageDragOffset: CGFloat = 0
 
     // The collapsed dimensions come from the detected notch silhouette so the
     // resting pill perfectly overlaps the real notch (or the menu bar on
@@ -52,6 +54,12 @@ struct ContentView: View {
             if newValue {
                 musicController.refreshNowPlaying()
             }
+            if !newValue {
+                withAnimation(hoverOutAnimation) {
+                    currentPage = 0
+                    pageDragOffset = 0
+                }
+            }
         }
     }
 
@@ -83,7 +91,66 @@ struct ContentView: View {
         ZStack(alignment: .top) {
             islandSurface
             if contentProgress > 0.01 {
-                mediaContent
+                pagedContent
+            }
+        }
+    }
+
+    private var pagedContent: some View {
+        ZStack(alignment: .bottom) {
+            HStack(spacing: 0) {
+                page0Content
+                    .frame(width: expandedWidth)
+                page1Content
+                    .frame(width: expandedWidth)
+            }
+            .offset(x: -(CGFloat(currentPage) * expandedWidth) + pageDragOffset)
+
+            pageIndicator
+                .padding(.bottom, 10)
+                .opacity(contentProgress)
+                .allowsHitTesting(false)
+        }
+        .gesture(
+            DragGesture(minimumDistance: 15, coordinateSpace: .local)
+                .onChanged { value in
+                    guard contentProgress > 0.95 else { return }
+                    let raw = value.translation.width
+                    if (currentPage == 0 && raw > 0) || (currentPage == 1 && raw < 0) {
+                        pageDragOffset = raw * 0.25
+                    } else {
+                        pageDragOffset = raw
+                    }
+                }
+                .onEnded { value in
+                    guard contentProgress > 0.95 else { return }
+                    let predicted = value.predictedEndTranslation.width
+                    withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                        if predicted < -60 && currentPage < 1 {
+                            currentPage = 1
+                        } else if predicted > 60 && currentPage > 0 {
+                            currentPage = 0
+                        }
+                        pageDragOffset = 0
+                    }
+                }
+        )
+        .opacity(contentProgress)
+        .scaleEffect(lerp(0.98, 1, contentProgress), anchor: .center)
+        .allowsHitTesting(contentProgress > 0.95)
+    }
+
+    private var page1Content: some View {
+        Color.clear
+    }
+
+    private var pageIndicator: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<2, id: \.self) { index in
+                Circle()
+                    .fill(currentPage == index ? Color.white.opacity(0.8) : Color.white.opacity(0.25))
+                    .frame(width: 4, height: 4)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.8), value: currentPage)
             }
         }
     }
@@ -109,7 +176,7 @@ struct ContentView: View {
             )
     }
 
-    private var mediaContent: some View {
+    private var page0Content: some View {
         HStack(alignment: .center, spacing: 18) {
             Button {
                 musicController.openMusicApp()
@@ -157,9 +224,6 @@ struct ContentView: View {
         }
         .padding(.top, 38)
         .padding(.horizontal, 30)
-        .opacity(contentProgress)
-        .scaleEffect(lerp(0.98, 1, contentProgress), anchor: .center)
-        .allowsHitTesting(contentProgress > 0.95)
     }
 
     private func mediaButton(systemName: String, symbolSize: CGFloat, buttonSize: CGFloat, action: @escaping () -> Void) -> some View {
