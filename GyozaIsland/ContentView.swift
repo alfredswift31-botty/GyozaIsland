@@ -111,7 +111,12 @@ struct ContentView: View {
                 .opacity(contentProgress)
                 .allowsHitTesting(false)
         }
-        .gesture(
+        // Fix 1: bound the ZStack so it stays 430pt wide — without this the HStack
+        // (2×430 = 860pt) inflates the ZStack and pushes the indicator off-screen.
+        .frame(width: expandedWidth, height: expandedHeight)
+        // Fix 2: simultaneousGesture lets child buttons still fire on click;
+        // plain .gesture() competes and wins, silently swallowing button taps.
+        .simultaneousGesture(
             DragGesture(minimumDistance: 15, coordinateSpace: .local)
                 .onChanged { value in
                     guard contentProgress > 0.95 else { return }
