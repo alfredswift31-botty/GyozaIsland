@@ -10,13 +10,15 @@ final class MusicController: ObservableObject {
     @Published private(set) var artworkImage: NSImage?
     @Published private(set) var playbackPosition: Double = 0
     @Published private(set) var playbackDuration: Double = 0
+    @Published private(set) var nowPlayingID = "stopped"
 
     private var progressTimer: AnyCancellable?
     private var progressRefreshTick = 0
+    private var isRefreshingNowPlaying = false
 
     init() {
         progressTimer = Timer
-            .publish(every: 1, on: .main, in: .common)
+            .publish(every: 0.5, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
                 self?.tickPlaybackProgress()
@@ -169,6 +171,10 @@ final class MusicController: ObservableObject {
     }
 
     private func runInfoScript(_ source: String, label: String) {
+        guard !isRefreshingNowPlaying else { return }
+        isRefreshingNowPlaying = true
+        defer { isRefreshingNowPlaying = false }
+
         let result = executeAppleScript(source)
 
         if let error = result.error {
@@ -190,13 +196,18 @@ final class MusicController: ObservableObject {
         let artworkPath = lines.dropFirst(3).first ?? ""
         let position = Double(lines.dropFirst(4).first ?? "") ?? 0
         let duration = Double(lines.dropFirst(5).first ?? "") ?? 0
+        let nextTitle = title.isEmpty ? "Apple Music" : title
+        let nextSubtitle = subtitle.isEmpty ? playbackState.capitalized : subtitle
+        let nextDuration = max(duration, 0)
 
         prefersPauseIcon = playbackState == "playing"
-        trackTitle = title.isEmpty ? "Apple Music" : title
-        trackSubtitle = subtitle.isEmpty ? playbackState.capitalized : subtitle
+        trackTitle = nextTitle
+        trackSubtitle = nextSubtitle
         artworkImage = artworkPath.isEmpty ? nil : NSImage(contentsOfFile: artworkPath)
-        playbackPosition = min(max(position, 0), max(duration, 0))
-        playbackDuration = max(duration, 0)
+        playbackPosition = min(max(position, 0), nextDuration)
+        playbackDuration = nextDuration
+        nowPlayingID = [nextTitle, nextSubtitle, String(format: "%.3f", nextDuration)]
+            .joined(separator: "|")
     }
 
     private func applyAppleScriptError(_ error: NSDictionary, label: String) {
@@ -210,6 +221,7 @@ final class MusicController: ObservableObject {
         artworkImage = nil
         playbackPosition = 0
         playbackDuration = 0
+        nowPlayingID = "error"
         if let number, let message {
             trackSubtitle = "Music control failed (\(number)): \(message)"
         } else if let message {
@@ -240,11 +252,12 @@ final class MusicController: ObservableObject {
         }
 
         if playbackDuration > 0 {
-            playbackPosition = min(playbackPosition + 1, playbackDuration)
+            playbackPosition = min(playbackPosition + 0.5, playbackDuration)
         }
 
         progressRefreshTick += 1
-        if progressRefreshTick >= 5 {
+        let isNearTrackEnd = playbackDuration > 0 && playbackDuration - playbackPosition <= 5
+        if progressRefreshTick >= 10 || isNearTrackEnd {
             progressRefreshTick = 0
             refreshNowPlaying()
         }
@@ -257,6 +270,7 @@ final class MusicController: ObservableObject {
         artworkImage = nil
         playbackPosition = 0
         playbackDuration = 0
+        nowPlayingID = "closed"
     }
 }
 

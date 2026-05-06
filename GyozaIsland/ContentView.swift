@@ -226,22 +226,15 @@ struct ContentView: View {
                 musicController.openMusicApp()
             } label: {
                 albumArtwork
+                    .id(musicController.nowPlayingID)
+                    .transition(trackContentTransition)
             }
             .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 6) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(musicController.trackTitle)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-
-                    Text(musicController.trackSubtitle)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.62))
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                trackText
+                    .id(musicController.nowPlayingID)
+                    .transition(trackContentTransition)
 
                 HStack(spacing: 16) {
                     mediaButton(systemName: "backward.fill", symbolSize: 13, buttonSize: 38) {
@@ -264,12 +257,37 @@ struct ContentView: View {
                 }
 
                 mediaScrubber
+                    .id(musicController.nowPlayingID)
+                    .transition(trackContentTransition)
             }
 
             airDropButton
         }
         .padding(.top, 24)
         .padding(.horizontal, 30)
+        .animation(.easeInOut(duration: 0.42), value: musicController.nowPlayingID)
+    }
+
+    private var trackText: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(musicController.trackTitle)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+
+            Text(musicController.trackSubtitle)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.62))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var trackContentTransition: AnyTransition {
+        .asymmetric(
+            insertion: .opacity.animation(.easeOut(duration: 0.34).delay(0.03)),
+            removal: .opacity.animation(.easeIn(duration: 0.22))
+        )
     }
 
     private var mediaScrubber: some View {
