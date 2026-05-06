@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var expansionProgress: CGFloat = 0
     @State private var currentPage: Int = 0
     @State private var isScrubbingPlayback = false
+    @State private var isMirrorActive = false
     @State private var scrubberPosition: Double = 0
     // Actual HStack offset in points. Animating this CGFloat directly gives a
     // smooth slide — changing Int currentPage inside withAnimation causes an
@@ -68,6 +69,7 @@ struct ContentView: View {
                     currentPage = 0
                     pageOffset = 0
                     panelState.currentPage = 0
+                    isMirrorActive = false
                 }
             }
         }
@@ -116,6 +118,8 @@ struct ContentView: View {
                 page0Content
                     .frame(width: expandedWidth)
                 page1Content
+                    .frame(width: expandedWidth)
+                page2Content
                     .frame(width: expandedWidth)
             }
             .frame(width: expandedWidth, alignment: .leading)
@@ -261,16 +265,56 @@ struct ContentView: View {
         }
     }
 
+    private var page2Content: some View {
+          HStack(alignment: .top, spacing: 0) {
+              VStack(spacing: 7) {
+                  ZStack {
+                      if isMirrorActive {
+                            Button { isMirrorActive = false } label: {
+                                CameraPreviewView()
+                                    .scaleEffect(x: -1, y: 1)
+                                    .frame(width: 104, height: 104)
+                                    .clipShape(Circle())
+                                    .overlay { Circle().stroke(Color.white.opacity(0.22), lineWidth: 1) }
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                          Button { isMirrorActive = true } label: {
+                              ZStack {
+                                  Circle()
+                                      .fill(Color.white.opacity(0.12))
+                                      .frame(width: 104, height: 104)
+                                      .overlay { Circle().stroke(Color.white.opacity(0.18), lineWidth: 1) }
+                                  Image(systemName: "camera.fill")
+                                      .font(.system(size: 33, weight: .semibold))
+                                      .foregroundStyle(.white.opacity(0.88))
+                              }
+                          }
+                          .buttonStyle(.plain)
+                      }
+                  }
+                  .frame(width: 104, height: 104)
+                  Text("Mirror")
+                      .font(.system(size: 12, weight: .semibold))
+                      .foregroundStyle(.white.opacity(0.55))
+              }
+              .padding(.top, 25)
+              .padding(.leading, 30)
+              Spacer(minLength: 0)
+          }
+          .frame(height: expandedHeight)
+      }
+
     private func baseOffset(for page: Int) -> CGFloat {
-        -CGFloat(min(max(page, 0), 1)) * expandedWidth
+        -CGFloat(min(max(page, 0), 2)) * expandedWidth
     }
 
     private func commitTriggeredSwipe(direction: Int, source: String) {
         let targetPage: Int
-        if currentPage == 0 && direction < 0 {
-            targetPage = 1
-        } else if currentPage == 1 && direction > 0 {
-            targetPage = 0
+        if direction < 0 {
+            targetPage = min(currentPage + 1, 2)
+        } else if direction > 0 {
+            targetPage = max(currentPage - 1, 0)
         } else {
             targetPage = currentPage
         }
@@ -292,7 +336,7 @@ struct ContentView: View {
         direction: String
     ) {
         let pageBefore = currentPage
-        let targetPage = min(max(page, 0), 1)
+        let targetPage = min(max(page, 0), 2)
         let finalOffset = baseOffset(for: targetPage)
         print(
             "[GyozaIsland] page snap",
@@ -316,7 +360,7 @@ struct ContentView: View {
 
     private var pageIndicator: some View {
         HStack(spacing: 5) {
-            ForEach(0..<2, id: \.self) { index in
+            ForEach(0..<3, id: \.self) { index in
                 Circle()
                     .fill(currentPage == index ? Color.white.opacity(0.8) : Color.white.opacity(0.25))
                     .frame(width: 4, height: 4)
