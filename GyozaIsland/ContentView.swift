@@ -7,7 +7,10 @@ struct ContentView: View {
     @State private var isHoveringIsland = false
     @State private var expansionProgress: CGFloat = 0
     @State private var currentPage: Int = 0
-    @State private var pageDragOffset: CGFloat = 0
+    // Actual HStack offset in points. Animating this CGFloat directly gives a
+    // smooth slide — changing Int currentPage inside withAnimation causes an
+    // instant 430pt jump followed by a partial spring, which feels like a stutter.
+    @State private var pageOffset: CGFloat = 0
 
     // The collapsed dimensions come from the detected notch silhouette so the
     // resting pill perfectly overlaps the real notch (or the menu bar on
@@ -24,7 +27,7 @@ struct ContentView: View {
     private let hoverOutAnimation = Animation.spring(response: 0.50, dampingFraction: 0.92)
 
     private var isExpandedTarget: Bool {
-        panelState.isInteractionActive || panelState.isFileDragActive || isHoveringIsland
+        panelState.isInteractionActive || panelState.isFileDragActive
     }
 
     private var shapeProgress: CGFloat {
@@ -57,29 +60,39 @@ struct ContentView: View {
             if !newValue {
                 withAnimation(hoverOutAnimation) {
                     currentPage = 0
-                    pageDragOffset = 0
+                    pageOffset = 0
                 }
             }
         }
-        // Trackpad two-finger swipe: live offset during scroll.
+        // Live visual feedback while the user is swiping.
         .onChange(of: panelState.pageSwipeAccum) { _, accum in
             guard contentProgress > 0.95 else { return }
-            let raw = accum
-            if (currentPage == 0 && raw > 0) || (currentPage == 1 && raw < 0) {
-                pageDragOffset = raw * 0.3
+            let base = -(CGFloat(currentPage) * expandedWidth)
+            let candidate = base + accum
+            // Rubber band when dragging past the first or last page.
+            if candidate > 0 {
+                pageOffset = candidate * 0.25
+            } else if candidate < -expandedWidth {
+                pageOffset = -expandedWidth + (candidate + expandedWidth) * 0.25
             } else {
-                pageDragOffset = raw
+                pageOffset = candidate
             }
         }
-        // Commit or cancel the page change when the swipe gesture ends.
+        // Finger lifted — commit or snap back with a full spring from current pos.
         .onChange(of: panelState.pageSwipeCommit) { _, _ in
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
-                if pageDragOffset < -25 && currentPage < 1 {
-                    currentPage = 1
-                } else if pageDragOffset > 25 && currentPage > 0 {
-                    currentPage = 0
-                }
-                pageDragOffset = 0
+            let base = -(CGFloat(currentPage) * expandedWidth)
+            let displacement = pageOffset - base
+            let newPage: Int
+            if displacement < -25 && currentPage < 1 {
+                newPage = 1
+            } else if displacement > 25 && currentPage > 0 {
+                newPage = 0
+            } else {
+                newPage = currentPage
+            }
+            currentPage = newPage
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                pageOffset = -(CGFloat(newPage) * expandedWidth)
             }
         }
     }
@@ -99,13 +112,13 @@ struct ContentView: View {
         }
         .foregroundColor(.white)
         .frame(width: islandWidth, height: islandHeight, alignment: .top)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // contentShape and onHover must sit on the correctly-sized frame so
+        // the hover zone matches the actual pill/card, not the full panel area.
         .contentShape(IslandShellShape(progress: bodyProgress))
         .onHover { isHovering in
-            if isHovering != isHoveringIsland {
-                isHoveringIsland = isHovering
-            }
+            if isHovering != isHoveringIsland { isHoveringIsland = isHovering }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var islandBody: some View {
@@ -128,10 +141,8 @@ struct ContentView: View {
                     .frame(width: expandedWidth)
             }
             .frame(width: expandedWidth, alignment: .leading)
-            .offset(x: -(CGFloat(currentPage) * expandedWidth) + pageDragOffset)
+            .offset(x: pageOffset)
 
-            // Indicator pushed to bottom via Spacer so it doesn't affect the
-            // top-aligned content position.
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
                 pageIndicator
@@ -145,24 +156,32 @@ struct ContentView: View {
             DragGesture(minimumDistance: 8, coordinateSpace: .local)
                 .onChanged { value in
                     guard contentProgress > 0.95 else { return }
-                    let raw = value.translation.width
-                    if (currentPage == 0 && raw > 0) || (currentPage == 1 && raw < 0) {
-                        pageDragOffset = raw * 0.25
+                    let base = -(CGFloat(currentPage) * expandedWidth)
+                    let candidate = base + value.translation.width
+                    if candidate > 0 {
+                        pageOffset = candidate * 0.25
+                    } else if candidate < -expandedWidth {
+                        pageOffset = -expandedWidth + (candidate + expandedWidth) * 0.25
                     } else {
-                        pageDragOffset = raw
+                        pageOffset = candidate
                     }
                 }
                 .onEnded { value in
                     guard contentProgress > 0.95 else { return }
-                    let translation = value.translation.width
+                    let base = -(CGFloat(currentPage) * expandedWidth)
+                    let displacement = pageOffset - base
                     let predicted = value.predictedEndTranslation.width
-                    withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
-                        if (translation < -25 || predicted < -50) && currentPage < 1 {
-                            currentPage = 1
-                        } else if (translation > 25 || predicted > 50) && currentPage > 0 {
-                            currentPage = 0
-                        }
-                        pageDragOffset = 0
+                    let newPage: Int
+                    if (displacement < -25 || predicted < -50) && currentPage < 1 {
+                        newPage = 1
+                    } else if (displacement > 25 || predicted > 50) && currentPage > 0 {
+                        newPage = 0
+                    } else {
+                        newPage = currentPage
+                    }
+                    currentPage = newPage
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                        pageOffset = -(CGFloat(newPage) * expandedWidth)
                     }
                 }
         )
