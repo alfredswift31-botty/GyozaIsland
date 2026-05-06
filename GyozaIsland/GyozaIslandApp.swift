@@ -48,7 +48,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var islandPanel: NSPanel?
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
-    private var scrollMonitor: Any?
+    private var scrollLocalMonitor: Any?
+    private var scrollGlobalMonitor: Any?
     private var swipeAccum: CGFloat = 0
     private let panelState = IslandPanelState()
     private let panelSize = NSSize(width: 450, height: 172)
@@ -119,9 +120,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSEvent.removeMonitor(monitor)
             localMouseMonitor = nil
         }
-        if let monitor = scrollMonitor {
+        if let monitor = scrollLocalMonitor {
             NSEvent.removeMonitor(monitor)
-            scrollMonitor = nil
+            scrollLocalMonitor = nil
+        }
+        if let monitor = scrollGlobalMonitor {
+            NSEvent.removeMonitor(monitor)
+            scrollGlobalMonitor = nil
         }
     }
 
@@ -146,11 +151,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.updatePanelVisibility()
             return event
         }
-        // Trackpad two-finger swipe arrives as scroll wheel events, not drags.
-        // Local monitor is sufficient — events on our panel go to our process.
-        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+        // Trackpad swipe = scroll wheel events. The panel is non-activating so
+        // our app is never the key app — local monitor alone won't fire when
+        // another app is active. Use both, same pattern as mouse monitors.
+        scrollLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             self?.handleScrollWheel(event)
             return event
+        }
+        scrollGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            self?.handleScrollWheel(event)
         }
         updatePanelVisibility()
     }
