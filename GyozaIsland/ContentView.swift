@@ -61,6 +61,27 @@ struct ContentView: View {
                 }
             }
         }
+        // Trackpad two-finger swipe: live offset during scroll.
+        .onChange(of: panelState.pageSwipeAccum) { _, accum in
+            guard contentProgress > 0.95 else { return }
+            let raw = accum
+            if (currentPage == 0 && raw > 0) || (currentPage == 1 && raw < 0) {
+                pageDragOffset = raw * 0.3
+            } else {
+                pageDragOffset = raw
+            }
+        }
+        // Commit or cancel the page change when the swipe gesture ends.
+        .onChange(of: panelState.pageSwipeCommit) { _, _ in
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                if pageDragOffset < -25 && currentPage < 1 {
+                    currentPage = 1
+                } else if pageDragOffset > 25 && currentPage > 0 {
+                    currentPage = 0
+                }
+                pageDragOffset = 0
+            }
+        }
     }
 
     private var island: some View {

@@ -16,13 +16,13 @@ final class IslandPanelState: ObservableObject {
     @Published var isInteractionActive = false
     @Published var isFileDragActive = false
     @Published var isAirDropTargeted = false
-    /// Detected size of the real notch (or menu-bar-thickness fallback) so the
-    /// resting pill can match the system silhouette exactly.
     @Published var collapsedSize: CGSize = CGSize(width: 200, height: 32)
-    /// Full top-reserved band height (notch + any extra menu bar strip below
-    /// it). The expanded shape's flare lands here so the wider card body
-    /// starts exactly at the menu bar's bottom edge.
     @Published var bandHeight: CGFloat = 37
+    // Live scroll accumulation for page-swipe visual feedback.
+    @Published var pageSwipeAccum: CGFloat = 0
+    // Incremented each time a scroll gesture ends; ContentView observes this
+    // to commit or cancel the pending page change.
+    @Published var pageSwipeCommit: Int = 0
 }
 
 @main
@@ -48,6 +48,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var islandPanel: NSPanel?
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
+    private var scrollMonitor: Any?
+    private var swipeAccum: CGFloat = 0
     private let panelState = IslandPanelState()
     private let panelSize = NSSize(width: 450, height: 172)
     private let collapsedNotchHeight: CGFloat = 32
@@ -117,6 +119,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSEvent.removeMonitor(monitor)
             localMouseMonitor = nil
         }
+        if let monitor = scrollMonitor {
+            NSEvent.removeMonitor(monitor)
+            scrollMonitor = nil
+        }
     }
 
     /// Drive hover and drag detection from real pointer events instead of
@@ -140,9 +146,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.updatePanelVisibility()
             return event
         }
-        // Run once on startup so the panel is positioned correctly before the
-        // user moves the cursor.
+        // Trackpad two-finger swipe arrives as scroll wheel events, not drags.
+        // Local monitor is sufficient — events on our panel go to our process.
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            self?.handleScrollWheel(event)
+            return event
+        }
         updatePanelVisibility()
+    }
+
+    private func handleScrollWheel(_ event: NSEvent) {
+        guard let panel = islandPanel,
+              panelState.isInteractionActive,
+              panel.frame.contains(NSEvent.mouseLocation) else {
+            if event.phase == .ended || event.phase == .cancelled {
+                swipeAccum = 0
+                panelState.pageSwipeAccum = 0
+            }
+            return
+        }
+        // Ignore scrolls that are more vertical than horizontal.
+        guard abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 0.4 else { return }
+
+        switch event.phase {
+        case .began:
+            swipeAccum = 0
+            panelState.pageSwipeAccum = 0
+        case .changed:
+            swipeAccum += event.scrollingDeltaX
+            panelState.pageSwipeAccum = swipeAccum
+        case .ended, .cancelled:
+            panelState.pageSwipeCommit += 1
+            swipeAccum = 0
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+                self?.panelState.pageSwipeAccum = 0
+            }
+        default:
+            break
+        }
     }
 
     private func updatePanelVisibility() {
@@ -156,7 +197,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         positionPanel(panel, on: screen, size: panelSize)
 
         let activationZone = activationRect(for: screen, panelSize: panelSize)
-        let shouldExpand = activationZone.contains(mouseLocation) || panel.frame.contains(mouseLocation)
+        let alreadyExpanded = panelState.isInteractionActive
+
+        // Two-stage: tight notch zone opens the card; full panel frame only
+        // keeps it open once already expanded. This prevents the card from
+        // opening when the cursor drifts near the menu bar from below.
+        let shouldExpand = activationZone.contains(mouseLocation)
+                        || (alreadyExpanded && panel.frame.contains(mouseLocation))
+
+        if !shouldExpand {
+            swipeAccum = 0
+            panelState.pageSwipeAccum = 0
+        }
         panelState.isInteractionActive = shouldExpand
     }
 
@@ -186,16 +238,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func activationRect(for screen: NSScreen, panelSize: NSSize) -> NSRect {
         let metrics = notchMetrics(for: screen, panelSize: panelSize)
-        // Keep the zone tight to the actual notch so the card only opens when
-        // the cursor is near the notch, not anywhere along the menu bar.
-        let width = metrics.notchWidth + 24
-        let height = metrics.bandHeight + 6
-
+        // Match the real notch dimensions exactly so the card only opens when
+        // the cursor enters the physical notch cutout.
         return NSRect(
-            x: metrics.midpointX - width / 2,
-            y: metrics.bandMinY - 6,
-            width: width,
-            height: height
+            x: metrics.midpointX - metrics.notchWidth / 2,
+            y: metrics.bandMinY,
+            width: metrics.notchWidth,
+            height: metrics.bandHeight
         )
     }
 
