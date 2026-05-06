@@ -15,6 +15,7 @@ private let filenamesPasteboardType = NSPasteboard.PasteboardType("NSFilenamesPb
 final class IslandPanelState: ObservableObject {
     @Published var isInteractionActive = false
     @Published var isFileDragActive = false
+    @Published var isAirDropTargeted = false
     /// Detected size of the real notch (or menu-bar-thickness fallback) so the
     /// resting pill can match the system silhouette exactly.
     @Published var collapsedSize: CGSize = CGSize(width: 200, height: 32)
@@ -62,11 +63,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        // Draw above the system menu bar so the pill's flare in the menu bar
-        // reserve strip is actually visible — at .statusBar (25) the menu bar
-        // background paints over the flare and the expanded card looks
-        // disconnected from the top of the screen.
-        panel.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
+        // Must be above the menu bar (kCGStatusWindowLevel = 25) to draw over it,
+        // but BELOW the system drag cursor window (kCGDraggingWindowLevel = 500).
+        // AppKit only delivers drops to windows beneath the dragging window — at
+        // CGShieldingWindowLevel the panel is above the drag cursor so draggingEntered
+        // is never called and all drops fall through silently.
+        panel.level = NSWindow.Level(rawValue: 400)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
@@ -76,11 +78,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
         panel.standardWindowButton(.zoomButton)?.isHidden = true
         panel.alphaValue = 1
-        let hostingView = DragAwareHostingView(rootView: ContentView(panelState: panelState), panelState: panelState)
+        let dropContainer = DragAwareContainerView(panelState: panelState)
+        dropContainer.frame = NSRect(origin: .zero, size: panelSize)
+        dropContainer.autoresizingMask = [.width, .height]
+        dropContainer.wantsLayer = true
+        dropContainer.layer?.backgroundColor = NSColor.clear.cgColor
+        dropContainer.layer?.masksToBounds = false
+
+        let hostingView = NSHostingView(rootView: ContentView(panelState: panelState))
+        hostingView.frame = dropContainer.bounds
+        hostingView.autoresizingMask = [.width, .height]
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = NSColor.clear.cgColor
         hostingView.layer?.masksToBounds = false
-        panel.contentView = hostingView
+        dropContainer.addSubview(hostingView)
+        // Prevent SwiftUI's internal drag machinery from intercepting drags
+        // before DragAwareContainerView gets them.
+        hostingView.unregisterDraggedTypes()
+        panel.contentView = dropContainer
 
         if let screen = NSScreen.main {
             positionPanel(panel, on: screen, size: panelSize)
@@ -104,14 +119,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Drive hover detection from real mouse-moved events instead of polling.
-    /// Fires only when the cursor actually moves, so the app sleeps when idle
-    /// and reacts within a single event tick when it doesn't.
+    /// Drive hover and drag detection from real pointer events instead of
+    /// polling. File drags do not reliably emit plain mouse-moved events, so
+    /// dragged events must feed the same activation-zone logic.
     private func startMouseTracking() {
-        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
+        let pointerEvents: NSEvent.EventTypeMask = [
+            .mouseMoved,
+            .leftMouseDragged,
+            .rightMouseDragged,
+            .otherMouseDragged,
+            .leftMouseUp,
+            .rightMouseUp,
+            .otherMouseUp
+        ]
+
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: pointerEvents) { [weak self] _ in
             self?.updatePanelVisibility()
         }
-        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: pointerEvents) { [weak self] event in
             self?.updatePanelVisibility()
             return event
         }
@@ -141,7 +166,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             x: metrics.midpointX - size.width / 2,
             y: metrics.panelOriginY
         )
-        panel.setFrameOrigin(origin)
+        // Only reposition when the origin actually changes — calling setFrameOrigin
+        // unconditionally on every drag event resets AppKit's drag destination
+        // tracking, causing drops to fall through to the window below.
+        if panel.frame.origin != origin {
+            panel.setFrameOrigin(origin)
+        }
 
         // Surface the detected notch silhouette so the resting pill in
         // ContentView can match the system geometry exactly.
@@ -224,88 +254,138 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-final class DragAwareHostingView<Content: View>: NSHostingView<Content> {
+final class DragAwareContainerView: NSView {
     private weak var panelState: IslandPanelState?
 
-    init(rootView: Content, panelState: IslandPanelState) {
-        self.panelState = panelState
-        super.init(rootView: rootView)
-        registerForDraggedTypes([.fileURL, .URL, filenamesPasteboardType])
-    }
+    // Modern Finder drags lead with promised-file-url; register for it so
+    // draggingEntered is called even before the file data is materialised.
+    private static let promisedFileURLType =
+        NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-url")
 
-    required init(rootView: Content) {
-        super.init(rootView: rootView)
-        registerForDraggedTypes([.fileURL, .URL, filenamesPasteboardType])
+    init(panelState: IslandPanelState) {
+        self.panelState = panelState
+        super.init(frame: .zero)
+        registerForDraggedTypes([
+            .fileURL,
+            .URL,
+            filenamesPasteboardType,
+            DragAwareContainerView.promisedFileURLType
+        ])
     }
 
     @available(*, unavailable)
-    @MainActor dynamic required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+    required init?(coder: NSCoder) { fatalError() }
+
+    // Only inspect pasteboard TYPES here — never read content during tracking.
+    // Promised file URLs are not resolvable until performDragOperation; calling
+    // readObjects() during draggingEntered/Updated returns empty and causes the
+    // operation to fall back to [] which cancels the drag destination.
+    private func canAcceptDrag(_ sender: NSDraggingInfo) -> Bool {
+        guard let types = sender.draggingPasteboard.types else { return false }
+        return types.contains(.fileURL) ||
+               types.contains(.URL) ||
+               types.contains(filenamesPasteboardType) ||
+               types.contains(DragAwareContainerView.promisedFileURLType)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard hasFileURLs(sender.draggingPasteboard) else {
+        guard canAcceptDrag(sender) else {
+            print("[GyozaIsland] draggingEntered – rejected, types: \(sender.draggingPasteboard.types ?? [])")
             return []
         }
-
+        print("[GyozaIsland] draggingEntered – accepted, types: \(sender.draggingPasteboard.types ?? [])")
         panelState?.isFileDragActive = true
         return .copy
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard hasFileURLs(sender.draggingPasteboard) else {
-            return []
-        }
-
+        guard canAcceptDrag(sender) else { return [] }
         panelState?.isFileDragActive = true
+        panelState?.isAirDropTargeted = isOverAirDropButton(sender.draggingLocation)
         return .copy
     }
 
-    override func draggingExited(_ sender: NSDraggingInfo?) {
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let ok = canAcceptDrag(sender)
+        print("[GyozaIsland] prepareForDragOperation → \(ok)")
+        return ok
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        print("[GyozaIsland] performDragOperation – types: \(sender.draggingPasteboard.types ?? [])")
         panelState?.isFileDragActive = false
+        panelState?.isAirDropTargeted = false
+
+        let items = resolvedItems(from: sender.draggingPasteboard)
+        print("[GyozaIsland] resolved \(items.count) item(s)")
+        guard !items.isEmpty else { return false }
+
+        let airDropName = NSSharingService.Name(rawValue: "com.apple.share.AirDrop.send")
+        if let service = NSSharingService(named: airDropName) {
+            print("[GyozaIsland] launching AirDrop service")
+            service.perform(withItems: items)
+        } else {
+            print("[GyozaIsland] AirDrop unavailable – showing sharing picker")
+            showSharingPicker(items: items, draggingInfo: sender)
+        }
+        return true
+    }
+
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+        print("[GyozaIsland] concludeDragOperation")
+        panelState?.isFileDragActive = false
+        panelState?.isAirDropTargeted = false
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        print("[GyozaIsland] draggingExited")
+        panelState?.isFileDragActive = false
+        panelState?.isAirDropTargeted = false
     }
 
     override func draggingEnded(_ sender: NSDraggingInfo) {
         panelState?.isFileDragActive = false
+        panelState?.isAirDropTargeted = false
     }
 
-    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        let urls = fileURLs(from: sender.draggingPasteboard)
-        panelState?.isFileDragActive = false
+    // AirDrop button occupies the right end of the media row.
+    // Panel: 450×172 (NSView coords, Y from bottom). Button: ~58×58.
+    private func isOverAirDropButton(_ windowPoint: NSPoint) -> Bool {
+        let p = convert(windowPoint, from: nil)
+        return p.x > 330 && p.y > 40 && p.y < 140
+    }
 
-        guard !urls.isEmpty else {
-            return false
+    // Read actual file items only at drop time (performDragOperation).
+    // Try promised receivers first (modern Finder), then direct URLs, then legacy paths.
+    private func resolvedItems(from pasteboard: NSPasteboard) -> [Any] {
+        if let receivers = pasteboard.readObjects(
+                forClasses: [NSFilePromiseReceiver.self], options: nil
+            ) as? [NSFilePromiseReceiver], !receivers.isEmpty {
+            print("[GyozaIsland] using \(receivers.count) NSFilePromiseReceiver(s)")
+            return receivers
         }
-
-        sendViaAirDrop(urls)
-        return true
-    }
-
-    private func hasFileURLs(_ pasteboard: NSPasteboard) -> Bool {
-        !fileURLs(from: pasteboard).isEmpty
-    }
-
-    private func fileURLs(from pasteboard: NSPasteboard) -> [URL] {
         if let urls = pasteboard.readObjects(
-            forClasses: [NSURL.self],
-            options: [.urlReadingFileURLsOnly: true]
-        ) as? [URL],
-           !urls.isEmpty {
+                forClasses: [NSURL.self],
+                options: [.urlReadingFileURLsOnly: true]
+            ) as? [URL], !urls.isEmpty {
+            print("[GyozaIsland] using \(urls.count) file URL(s): \(urls.map(\.lastPathComponent))")
             return urls
         }
-
         if let paths = pasteboard.propertyList(forType: filenamesPasteboardType) as? [String] {
-            return paths.map(URL.init(fileURLWithPath:))
+            let urls = paths.map(URL.init(fileURLWithPath:))
+            print("[GyozaIsland] using \(urls.count) legacy path URL(s)")
+            return urls
         }
-
         return []
     }
 
-    private func sendViaAirDrop(_ urls: [URL]) {
-        guard let service = NSSharingService(named: .sendViaAirDrop) else {
-            return
-        }
-
-        service.perform(withItems: urls)
+    private func showSharingPicker(items: [Any], draggingInfo: NSDraggingInfo) {
+        let viewLocation = convert(draggingInfo.draggingLocation, from: nil)
+        let picker = NSSharingServicePicker(items: items)
+        picker.show(
+            relativeTo: NSRect(x: viewLocation.x, y: viewLocation.y, width: 1, height: 1),
+            of: self,
+            preferredEdge: .minY
+        )
     }
 }

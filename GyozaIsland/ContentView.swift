@@ -1,13 +1,10 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var panelState: IslandPanelState
     @StateObject private var musicController = MusicController()
     @State private var isHoveringIsland = false
-    @State private var isAirDropTargeted = false
-    @State private var isFileDragInside = false
     @State private var expansionProgress: CGFloat = 0
 
     // The collapsed dimensions come from the detected notch silhouette so the
@@ -25,7 +22,7 @@ struct ContentView: View {
     private let hoverOutAnimation = Animation.spring(response: 0.50, dampingFraction: 0.92)
 
     private var isExpandedTarget: Bool {
-        panelState.isInteractionActive || panelState.isFileDragActive || isHoveringIsland || isFileDragInside
+        panelState.isInteractionActive || panelState.isFileDragActive || isHoveringIsland
     }
 
     private var shapeProgress: CGFloat {
@@ -85,7 +82,6 @@ struct ContentView: View {
     private var islandBody: some View {
         ZStack(alignment: .top) {
             islandSurface
-            dragExpansionTarget
             if contentProgress > 0.01 {
                 mediaContent
             }
@@ -111,14 +107,6 @@ struct ContentView: View {
                 IslandShellShape(progress: bodyProgress)
                     .stroke(Color.white.opacity(lerp(0.015, 0.08, bodyProgress)), lineWidth: 1)
             )
-    }
-
-    private var dragExpansionTarget: some View {
-        Color.clear
-            .contentShape(IslandShellShape(progress: bodyProgress))
-            .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isFileDragInside) { providers in
-                handleAirDrop(providers: providers)
-            }
     }
 
     private var mediaContent: some View {
@@ -190,20 +178,26 @@ struct ContentView: View {
             openAirDrop()
         } label: {
             airDropIcon
-            .frame(width: 58, height: 58)
-            .background(
-                (isAirDropTargeted ? Color.white.opacity(0.22) : Color.white.opacity(0.12)),
-                in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.white.opacity(isAirDropTargeted ? 0.42 : 0.0), lineWidth: 1)
-            }
+                .frame(width: 58, height: 58)
+                .background(
+                    panelState.isAirDropTargeted
+                        ? Color.white.opacity(0.30)
+                        : panelState.isFileDragActive
+                            ? Color.white.opacity(0.22)
+                            : Color.white.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(
+                            Color.white.opacity(panelState.isAirDropTargeted ? 0.65 : panelState.isFileDragActive ? 0.42 : 0.0),
+                            lineWidth: panelState.isAirDropTargeted ? 1.5 : 1
+                        )
+                }
+                .scaleEffect(panelState.isAirDropTargeted ? 1.06 : 1.0)
+                .animation(.spring(response: 0.25, dampingFraction: 0.7), value: panelState.isAirDropTargeted)
         }
         .buttonStyle(.plain)
-        .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isAirDropTargeted) { providers in
-            handleAirDrop(providers: providers)
-        }
     }
 
     private var airDropIcon: some View {
@@ -214,7 +208,7 @@ struct ContentView: View {
                     .scaledToFit()
                     .padding(10)
             } else {
-                Image(systemName: "airdrop")
+                Image(systemName: "dot.radiowaves.left.and.right")
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundStyle(.white)
             }
@@ -255,45 +249,6 @@ struct ContentView: View {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         NSWorkspace.shared.openApplication(at: airDropURL, configuration: configuration)
-    }
-
-    private func handleAirDrop(providers: [NSItemProvider]) -> Bool {
-        var urls: [URL] = []
-        let group = DispatchGroup()
-
-        for provider in providers {
-            group.enter()
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                defer { group.leave() }
-
-                if let url = item as? URL {
-                    urls.append(url)
-                } else if let data = item as? Data,
-                          let value = String(data: data, encoding: .utf8),
-                          let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                    urls.append(url)
-                } else if let value = item as? String,
-                          let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                    urls.append(url)
-                }
-            }
-        }
-
-        group.notify(queue: .main) {
-            sendViaAirDrop(urls)
-        }
-
-        return true
-    }
-
-    private func sendViaAirDrop(_ urls: [URL]) {
-        guard !urls.isEmpty,
-              let service = NSSharingService(named: .sendViaAirDrop) else {
-            openAirDrop()
-            return
-        }
-
-        service.perform(withItems: urls)
     }
 }
 
