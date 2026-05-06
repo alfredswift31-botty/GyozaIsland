@@ -21,6 +21,7 @@ struct ContentView: View {
     private var collapsedHeight: CGFloat { panelState.collapsedSize.height }
     private let expandedWidth: CGFloat = 430
     private let expandedHeight: CGFloat = 164
+    private let notchBlack = Color(nsColor: .black)
     // Spring physics give the Apple-like bounce-then-settle feel. Lower
     // damping on hover-in for a small overshoot; higher damping on hover-out
     // so the pill returns to the notch without jiggle.
@@ -52,6 +53,7 @@ struct ContentView: View {
         .background(Color.clear)
         .onAppear {
             expansionProgress = isExpandedTarget ? 1 : 0
+            panelState.currentPage = currentPage
             musicController.refreshNowPlaying()
         }
         .onChange(of: isExpandedTarget) { _, newValue in
@@ -65,6 +67,7 @@ struct ContentView: View {
                 withAnimation(hoverOutAnimation) {
                     currentPage = 0
                     pageOffset = 0
+                    panelState.currentPage = 0
                 }
             }
         }
@@ -133,7 +136,129 @@ struct ContentView: View {
     }
 
     private var page1Content: some View {
-        Color.clear
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Temporary vault")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+
+                    Text("Drop files here")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.58))
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "tray.and.arrow.down")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white.opacity(panelState.isShelfDropTargeted ? 0.88 : 0.42))
+            }
+
+            if panelState.temporaryShelfItems.isEmpty {
+                shelfPlaceholder
+            } else {
+                shelfItemGrid
+            }
+        }
+        .padding(.top, 34)
+        .padding(.horizontal, 30)
+        .padding(.bottom, 28)
+        .frame(height: expandedHeight, alignment: .top)
+        .background {
+            shelfDropSurface
+        }
+        .animation(.easeInOut(duration: 0.18), value: panelState.isShelfDropTargeted)
+    }
+
+    private var shelfPlaceholder: some View {
+        VStack(spacing: 5) {
+            Image(systemName: "doc.badge.plus")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white.opacity(panelState.isShelfDropTargeted ? 0.82 : 0.62))
+
+            Text("Drop files here")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(panelState.isShelfDropTargeted ? 0.76 : 0.58))
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 72)
+    }
+
+    private var shelfDropSurface: some View {
+        UnevenRoundedRectangle(
+            topLeadingRadius: 22,
+            bottomLeadingRadius: 38,
+            bottomTrailingRadius: 38,
+            topTrailingRadius: 22,
+            style: .continuous
+        )
+        .fill(Color.white.opacity(panelState.isShelfDropTargeted ? 0.105 : 0.065))
+        .overlay {
+            UnevenRoundedRectangle(
+                topLeadingRadius: 22,
+                bottomLeadingRadius: 38,
+                bottomTrailingRadius: 38,
+                topTrailingRadius: 22,
+                style: .continuous
+            )
+            .stroke(
+                Color.white.opacity(panelState.isShelfDropTargeted ? 0.34 : 0.0),
+                lineWidth: 1
+            )
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 88)
+        .padding(.bottom, 22)
+    }
+
+    private var shelfItemGrid: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(), spacing: 8),
+                    GridItem(.flexible(), spacing: 8)
+                ],
+                spacing: 8
+            ) {
+                ForEach(panelState.temporaryShelfItems) { item in
+                    shelfItemChip(item)
+                }
+            }
+            .padding(.bottom, 2)
+        }
+        .frame(maxHeight: 78)
+    }
+
+    private func shelfItemChip(_ item: TemporaryShelfItem) -> some View {
+        HStack(spacing: 7) {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
+                .resizable()
+                .frame(width: 18, height: 18)
+
+            Text(item.url.lastPathComponent)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.86))
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 0)
+
+            Button {
+                panelState.removeTemporaryShelfItem(item)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.46))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 30)
+        .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onDrag {
+            NSItemProvider(contentsOf: item.url) ?? NSItemProvider()
+        }
     }
 
     private func baseOffset(for page: Int) -> CGFloat {
@@ -185,6 +310,7 @@ struct ContentView: View {
         withAnimation(pageSnapAnimation) {
             currentPage = targetPage
             pageOffset = finalOffset
+            panelState.currentPage = targetPage
         }
     }
 
@@ -213,11 +339,7 @@ struct ContentView: View {
 
     private var islandSurface: some View {
         IslandShellShape(progress: bodyProgress)
-            .fill(Color.black)
-            .overlay(
-                IslandShellShape(progress: bodyProgress)
-                    .stroke(Color.white.opacity(lerp(0.015, 0.08, bodyProgress)), lineWidth: 1)
-            )
+            .fill(notchBlack)
     }
 
     private var page0Content: some View {
@@ -226,6 +348,10 @@ struct ContentView: View {
                 musicController.openMusicApp()
             } label: {
                 albumArtwork
+                    .overlay(alignment: .bottomTrailing) {
+                        appleMusicBadge
+                            .offset(x: 5, y: 5)
+                    }
                     .id(musicController.nowPlayingID)
                     .transition(trackContentTransition)
             }
@@ -422,6 +548,31 @@ struct ContentView: View {
         }
         .frame(width: 72, height: 72)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var appleMusicBadge: some View {
+        ZStack {
+            if let appIcon = appleMusicAppIcon {
+                Image(nsImage: appIcon)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: "music.note")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+        }
+        .frame(width: 22, height: 22)
+        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        .help("Apple Music")
+    }
+
+    private var appleMusicAppIcon: NSImage? {
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Music") else {
+            return nil
+        }
+
+        return NSWorkspace.shared.icon(forFile: appURL.path)
     }
 
     private func openAirDrop() {

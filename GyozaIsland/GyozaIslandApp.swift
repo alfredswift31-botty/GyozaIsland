@@ -12,14 +12,39 @@ import Combine
 
 private let filenamesPasteboardType = NSPasteboard.PasteboardType("NSFilenamesPboardType")
 
+struct TemporaryShelfItem: Identifiable, Equatable {
+    let id = UUID()
+    let url: URL
+}
+
 final class IslandPanelState: ObservableObject {
     @Published var isInteractionActive = false
     @Published var isFileDragActive = false
     @Published var isAirDropTargeted = false
+    @Published var isShelfDropTargeted = false
+    @Published var temporaryShelfItems: [TemporaryShelfItem] = []
     @Published var collapsedSize: CGSize = CGSize(width: 200, height: 32)
     @Published var bandHeight: CGFloat = 37
+    @Published var currentPage: Int = 0
     @Published var pageSwipeDirection: Int = 0
     @Published var pageSwipeTrigger: Int = 0
+
+    func addTemporaryShelfFiles(_ urls: [URL]) {
+        var seenURLs = Set(temporaryShelfItems.map(\.url))
+        let uniqueItems = urls.compactMap { url -> TemporaryShelfItem? in
+            let fileURL = url.standardizedFileURL
+            guard fileURL.isFileURL, !seenURLs.contains(fileURL) else { return nil }
+            seenURLs.insert(fileURL)
+            return TemporaryShelfItem(url: fileURL)
+        }
+
+        guard !uniqueItems.isEmpty else { return }
+        temporaryShelfItems.append(contentsOf: uniqueItems)
+    }
+
+    func removeTemporaryShelfItem(_ item: TemporaryShelfItem) {
+        temporaryShelfItems.removeAll { $0.id == item.id }
+    }
 }
 
 @main
@@ -227,7 +252,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Two-stage: tight notch zone opens the card; full panel frame only
         // keeps it open once already expanded. This prevents the card from
         // opening when the cursor drifts near the menu bar from below.
+        // Page 1 is a working shelf mode: keep it open while the user goes to
+        // fetch files or drag shelf items back out, then let page 0 collapse
+        // normally after they swipe back.
+        let shelfModeKeepsOpen = panelState.currentPage == 1
         let shouldExpand = activationZone.contains(mouseLocation)
+                        || shelfModeKeepsOpen
                         || (alreadyExpanded && panel.frame.contains(mouseLocation))
 
         if shouldExpand && !alreadyExpanded {
@@ -382,13 +412,16 @@ final class DragAwareContainerView: NSView {
         }
         print("[GyozaIsland] draggingEntered – accepted, types: \(sender.draggingPasteboard.types ?? [])")
         panelState?.isFileDragActive = true
+        panelState?.isShelfDropTargeted = panelState?.currentPage == 1
         return .copy
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard canAcceptDrag(sender) else { return [] }
         panelState?.isFileDragActive = true
-        panelState?.isAirDropTargeted = isOverAirDropButton(sender.draggingLocation)
+        let isShelfPage = panelState?.currentPage == 1
+        panelState?.isShelfDropTargeted = isShelfPage
+        panelState?.isAirDropTargeted = !isShelfPage && isOverAirDropButton(sender.draggingLocation)
         return .copy
     }
 
@@ -402,6 +435,14 @@ final class DragAwareContainerView: NSView {
         print("[GyozaIsland] performDragOperation – types: \(sender.draggingPasteboard.types ?? [])")
         panelState?.isFileDragActive = false
         panelState?.isAirDropTargeted = false
+        panelState?.isShelfDropTargeted = false
+
+        if panelState?.currentPage == 1 {
+            let urls = localFileURLs(from: sender.draggingPasteboard)
+            print("[GyozaIsland] shelf drop resolved \(urls.count) file URL(s)")
+            panelState?.addTemporaryShelfFiles(urls)
+            return !urls.isEmpty
+        }
 
         let items = resolvedItems(from: sender.draggingPasteboard)
         print("[GyozaIsland] resolved \(items.count) item(s)")
@@ -422,17 +463,20 @@ final class DragAwareContainerView: NSView {
         print("[GyozaIsland] concludeDragOperation")
         panelState?.isFileDragActive = false
         panelState?.isAirDropTargeted = false
+        panelState?.isShelfDropTargeted = false
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
         print("[GyozaIsland] draggingExited")
         panelState?.isFileDragActive = false
         panelState?.isAirDropTargeted = false
+        panelState?.isShelfDropTargeted = false
     }
 
     override func draggingEnded(_ sender: NSDraggingInfo) {
         panelState?.isFileDragActive = false
         panelState?.isAirDropTargeted = false
+        panelState?.isShelfDropTargeted = false
     }
 
     // AirDrop button occupies the right end of the media row.
@@ -462,6 +506,19 @@ final class DragAwareContainerView: NSView {
             let urls = paths.map(URL.init(fileURLWithPath:))
             print("[GyozaIsland] using \(urls.count) legacy path URL(s)")
             return urls
+        }
+        return []
+    }
+
+    private func localFileURLs(from pasteboard: NSPasteboard) -> [URL] {
+        if let urls = pasteboard.readObjects(
+                forClasses: [NSURL.self],
+                options: [.urlReadingFileURLsOnly: true]
+            ) as? [URL], !urls.isEmpty {
+            return urls.filter(\.isFileURL).map(\.standardizedFileURL)
+        }
+        if let paths = pasteboard.propertyList(forType: filenamesPasteboardType) as? [String] {
+            return paths.map(URL.init(fileURLWithPath:)).map(\.standardizedFileURL)
         }
         return []
     }
