@@ -12,6 +12,14 @@ import Combine
 
 private let filenamesPasteboardType = NSPasteboard.PasteboardType("NSFilenamesPboardType")
 
+/// Diagnostics for Debug builds only. Release builds never build the message,
+/// so drag types, file names and playback details stay out of stdout.
+func debugLog(_ message: @autoclosure () -> String) {
+    #if DEBUG
+    print(message())
+    #endif
+}
+
 struct TemporaryShelfItem: Identifiable, Equatable {
     let id = UUID()
     let url: URL
@@ -74,6 +82,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var scrollGlobalMonitor: Any?
     private var swipeAccum: CGFloat = 0
     private var swipeCommitLocked = false
+    // Bumped whenever the lock is re-armed or reset, so an unlock scheduled by
+    // an earlier swipe can't release the lock of a newer one early.
+    private var swipeLockGeneration = 0
     private let swipeScrollMultiplier: CGFloat = 2.6
     private let swipeTriggerThreshold: CGFloat = 22
     private let panelState = IslandPanelState()
@@ -81,6 +92,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let collapsedNotchHeight: CGFloat = 32
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        DragAwareContainerView.removeStalePromisedFiles()
+
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: panelSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -194,8 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               panelState.isInteractionActive,
               panel.frame.contains(NSEvent.mouseLocation) else {
             if event.phase == .ended || event.phase == .cancelled {
-                swipeAccum = 0
-                swipeCommitLocked = false
+                resetSwipeTracking()
             }
             return
         }
@@ -205,35 +217,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch event.phase {
         case .began:
-            swipeAccum = 0
-            swipeCommitLocked = false
+            resetSwipeTracking()
         case .changed:
             guard !swipeCommitLocked else { return }
             swipeAccum += event.scrollingDeltaX * swipeScrollMultiplier
             if abs(swipeAccum) > swipeTriggerThreshold {
                 let direction = swipeAccum < 0 ? -1 : 1
-                print(
-                    "[GyozaIsland] scroll swipe trigger",
-                    "accum=\(swipeAccum)",
-                    "threshold=\(swipeTriggerThreshold)",
-                    "direction=\(direction < 0 ? "left" : "right")"
+                debugLog(
+                    "[GyozaIsland] scroll swipe trigger accum=\(swipeAccum) threshold=\(swipeTriggerThreshold) direction=\(direction < 0 ? "left" : "right")"
                 )
                 panelState.pageSwipeDirection = direction
                 panelState.pageSwipeTrigger += 1
                 swipeAccum = 0
                 swipeCommitLocked = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                    self?.swipeCommitLocked = false
-                }
+                scheduleSwipeUnlock(after: 0.4)
             }
         case .ended, .cancelled:
             swipeAccum = 0
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                self?.swipeCommitLocked = false
-            }
+            scheduleSwipeUnlock(after: 0.15)
         default:
             break
         }
+    }
+
+    private func scheduleSwipeUnlock(after delay: TimeInterval) {
+        swipeLockGeneration += 1
+        let generation = swipeLockGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.swipeLockGeneration == generation else { return }
+            self.swipeCommitLocked = false
+        }
+    }
+
+    private func resetSwipeTracking() {
+        swipeLockGeneration += 1
+        swipeAccum = 0
+        swipeCommitLocked = false
     }
 
     private func updatePanelVisibility() {
@@ -261,18 +280,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         || (alreadyExpanded && panel.frame.contains(mouseLocation))
 
         if shouldExpand && !alreadyExpanded {
-            print(
-                "[GyozaIsland] hover activation",
-                "rect=(x:\(activationZone.origin.x), y:\(activationZone.origin.y), w:\(activationZone.width), h:\(activationZone.height))",
-                "mouse=(x:\(mouseLocation.x), y:\(mouseLocation.y))"
+            debugLog(
+                "[GyozaIsland] hover activation rect=(x:\(activationZone.origin.x), y:\(activationZone.origin.y), w:\(activationZone.width), h:\(activationZone.height)) mouse=(x:\(mouseLocation.x), y:\(mouseLocation.y))"
             )
         }
 
         if !shouldExpand {
-            swipeAccum = 0
-            swipeCommitLocked = false
+            resetSwipeTracking()
         }
-        panelState.isInteractionActive = shouldExpand
+        // This runs for every pointer event system-wide, and @Published notifies
+        // on every write even when the value is unchanged. Writing blindly made
+        // ContentView re-render on each mouse move anywhere on screen.
+        if alreadyExpanded != shouldExpand {
+            panelState.isInteractionActive = shouldExpand
+        }
     }
 
     private func positionPanel(_ panel: NSPanel, on screen: NSScreen, size: NSSize) {
@@ -379,19 +400,38 @@ final class DragAwareContainerView: NSView {
     private static let promisedFileURLType =
         NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-url")
 
+    // Everything that ends up as a file on disk: direct file URLs, legacy
+    // filename lists, and file promises (Photos, Mail attachments, etc.).
+    private static let fileDragTypes: [NSPasteboard.PasteboardType] =
+        [.fileURL, filenamesPasteboardType, promisedFileURLType]
+        + NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) }
+
+    // Promised files are written here. They are session-only, like the shelf.
+    private static let promisedFilesDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("GyozaIslandDrops", isDirectory: true)
+
+    private let promiseQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.qualityOfService = .userInitiated
+        return queue
+    }()
+
     init(panelState: IslandPanelState) {
         self.panelState = panelState
         super.init(frame: .zero)
-        registerForDraggedTypes([
-            .fileURL,
-            .URL,
-            filenamesPasteboardType,
-            DragAwareContainerView.promisedFileURLType
-        ])
+        registerForDraggedTypes(Self.fileDragTypes + [.URL])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    static func removeStalePromisedFiles() {
+        try? FileManager.default.removeItem(at: promisedFilesDirectory)
+    }
+
+    private var isShelfPage: Bool {
+        panelState?.currentPage == 1
+    }
 
     // Only inspect pasteboard TYPES here — never read content during tracking.
     // Promised file URLs are not resolvable until performDragOperation; calling
@@ -399,118 +439,127 @@ final class DragAwareContainerView: NSView {
     // operation to fall back to [] which cancels the drag destination.
     private func canAcceptDrag(_ sender: NSDraggingInfo) -> Bool {
         guard let types = sender.draggingPasteboard.types else { return false }
-        return types.contains(.fileURL) ||
-               types.contains(.URL) ||
-               types.contains(filenamesPasteboardType) ||
-               types.contains(DragAwareContainerView.promisedFileURLType)
+        if types.contains(where: { Self.fileDragTypes.contains($0) }) {
+            return true
+        }
+        // Web links can be AirDropped but have no place on the file shelf.
+        return !isShelfPage && types.contains(.URL)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard canAcceptDrag(sender) else {
-            print("[GyozaIsland] draggingEntered – rejected, types: \(sender.draggingPasteboard.types ?? [])")
+            debugLog("[GyozaIsland] draggingEntered – rejected, types: \(sender.draggingPasteboard.types ?? [])")
             return []
         }
-        print("[GyozaIsland] draggingEntered – accepted, types: \(sender.draggingPasteboard.types ?? [])")
-        panelState?.isFileDragActive = true
-        panelState?.isShelfDropTargeted = panelState?.currentPage == 1
+        debugLog("[GyozaIsland] draggingEntered – accepted, types: \(sender.draggingPasteboard.types ?? [])")
+        updateDragState(for: sender)
         return .copy
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard canAcceptDrag(sender) else { return [] }
-        panelState?.isFileDragActive = true
-        let isShelfPage = panelState?.currentPage == 1
-        panelState?.isShelfDropTargeted = isShelfPage
-        panelState?.isAirDropTargeted = !isShelfPage && isOverAirDropButton(sender.draggingLocation)
+        updateDragState(for: sender)
         return .copy
     }
 
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let ok = canAcceptDrag(sender)
-        print("[GyozaIsland] prepareForDragOperation → \(ok)")
+        debugLog("[GyozaIsland] prepareForDragOperation → \(ok)")
         return ok
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        print("[GyozaIsland] performDragOperation – types: \(sender.draggingPasteboard.types ?? [])")
-        panelState?.isFileDragActive = false
-        panelState?.isAirDropTargeted = false
-        panelState?.isShelfDropTargeted = false
+        let pasteboard = sender.draggingPasteboard
+        debugLog("[GyozaIsland] performDragOperation – types: \(pasteboard.types ?? [])")
+        let toShelf = isShelfPage
+        let anchor = convert(sender.draggingLocation, from: nil)
+        clearDragState()
 
-        if panelState?.currentPage == 1 {
-            let urls = localFileURLs(from: sender.draggingPasteboard)
-            print("[GyozaIsland] shelf drop resolved \(urls.count) file URL(s)")
-            panelState?.addTemporaryShelfFiles(urls)
-            return !urls.isEmpty
+        // Files that already exist on disk (Finder and most apps). Checked
+        // before promises so a drag that offers both uses the real file.
+        let urls = fileURLs(from: pasteboard)
+        if !urls.isEmpty {
+            debugLog("[GyozaIsland] drop resolved \(urls.count) file URL(s)")
+            deliver(urls, toShelf: toShelf, anchor: anchor)
+            return true
         }
 
-        let items = resolvedItems(from: sender.draggingPasteboard)
-        print("[GyozaIsland] resolved \(items.count) item(s)")
-        guard !items.isEmpty else { return false }
-
-        let airDropName = NSSharingService.Name(rawValue: "com.apple.share.AirDrop.send")
-        if let service = NSSharingService(named: airDropName) {
-            print("[GyozaIsland] launching AirDrop service")
-            service.perform(withItems: items)
-        } else {
-            print("[GyozaIsland] AirDrop unavailable – showing sharing picker")
-            showSharingPicker(items: items, draggingInfo: sender)
+        // Promise-only sources write their files asynchronously into a folder
+        // we choose. Neither the shelf nor AirDrop can use them before then.
+        if let receivers = pasteboard.readObjects(
+                forClasses: [NSFilePromiseReceiver.self], options: nil
+            ) as? [NSFilePromiseReceiver], !receivers.isEmpty {
+            debugLog("[GyozaIsland] receiving \(receivers.count) file promise(s)")
+            receivePromisedFiles(from: receivers) { [weak self] receivedURLs in
+                self?.deliver(receivedURLs, toShelf: toShelf, anchor: anchor)
+            }
+            return true
         }
-        return true
+
+        // Web links can be AirDropped but have no place on the file shelf.
+        if !toShelf,
+           let links = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+           !links.isEmpty {
+            debugLog("[GyozaIsland] sharing \(links.count) link(s)")
+            share(links, anchor: anchor)
+            return true
+        }
+
+        return false
     }
 
     override func concludeDragOperation(_ sender: NSDraggingInfo?) {
-        print("[GyozaIsland] concludeDragOperation")
-        panelState?.isFileDragActive = false
-        panelState?.isAirDropTargeted = false
-        panelState?.isShelfDropTargeted = false
+        debugLog("[GyozaIsland] concludeDragOperation")
+        clearDragState()
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
-        print("[GyozaIsland] draggingExited")
-        panelState?.isFileDragActive = false
-        panelState?.isAirDropTargeted = false
-        panelState?.isShelfDropTargeted = false
+        debugLog("[GyozaIsland] draggingExited")
+        clearDragState()
     }
 
     override func draggingEnded(_ sender: NSDraggingInfo) {
-        panelState?.isFileDragActive = false
-        panelState?.isAirDropTargeted = false
-        panelState?.isShelfDropTargeted = false
+        clearDragState()
+    }
+
+    private func updateDragState(for sender: NSDraggingInfo) {
+        let onShelf = isShelfPage
+        setDragState(
+            active: true,
+            shelfTargeted: onShelf,
+            airDropTargeted: !onShelf && isOverAirDropButton(sender.draggingLocation)
+        )
+    }
+
+    private func clearDragState() {
+        setDragState(active: false, shelfTargeted: false, airDropTargeted: false)
+    }
+
+    // draggingUpdated fires on every pointer move, and @Published notifies on
+    // every write, so only write values that actually change.
+    private func setDragState(active: Bool, shelfTargeted: Bool, airDropTargeted: Bool) {
+        guard let panelState else { return }
+        if panelState.isFileDragActive != active {
+            panelState.isFileDragActive = active
+        }
+        if panelState.isShelfDropTargeted != shelfTargeted {
+            panelState.isShelfDropTargeted = shelfTargeted
+        }
+        if panelState.isAirDropTargeted != airDropTargeted {
+            panelState.isAirDropTargeted = airDropTargeted
+        }
     }
 
     // AirDrop button occupies the right end of the media row.
-    // Panel: 450×172 (NSView coords, Y from bottom). Button: ~58×58.
+    // Panel: 450×186 (NSView coords, Y from bottom). Button: 58×58.
     private func isOverAirDropButton(_ windowPoint: NSPoint) -> Bool {
         let p = convert(windowPoint, from: nil)
         return p.x > 330 && p.y > 40 && p.y < 140
     }
 
-    // Read actual file items only at drop time (performDragOperation).
-    // Try promised receivers first (modern Finder), then direct URLs, then legacy paths.
-    private func resolvedItems(from pasteboard: NSPasteboard) -> [Any] {
-        if let receivers = pasteboard.readObjects(
-                forClasses: [NSFilePromiseReceiver.self], options: nil
-            ) as? [NSFilePromiseReceiver], !receivers.isEmpty {
-            print("[GyozaIsland] using \(receivers.count) NSFilePromiseReceiver(s)")
-            return receivers
-        }
-        if let urls = pasteboard.readObjects(
-                forClasses: [NSURL.self],
-                options: [.urlReadingFileURLsOnly: true]
-            ) as? [URL], !urls.isEmpty {
-            print("[GyozaIsland] using \(urls.count) file URL(s): \(urls.map(\.lastPathComponent))")
-            return urls
-        }
-        if let paths = pasteboard.propertyList(forType: filenamesPasteboardType) as? [String] {
-            let urls = paths.map(URL.init(fileURLWithPath:))
-            print("[GyozaIsland] using \(urls.count) legacy path URL(s)")
-            return urls
-        }
-        return []
-    }
-
-    private func localFileURLs(from pasteboard: NSPasteboard) -> [URL] {
+    // Read actual file items only at drop time (performDragOperation):
+    // direct file URLs first, then legacy paths.
+    private func fileURLs(from pasteboard: NSPasteboard) -> [URL] {
         if let urls = pasteboard.readObjects(
                 forClasses: [NSURL.self],
                 options: [.urlReadingFileURLsOnly: true]
@@ -523,13 +572,87 @@ final class DragAwareContainerView: NSView {
         return []
     }
 
-    private func showSharingPicker(items: [Any], draggingInfo: NSDraggingInfo) {
-        let viewLocation = convert(draggingInfo.draggingLocation, from: nil)
-        let picker = NSSharingServicePicker(items: items)
-        picker.show(
-            relativeTo: NSRect(x: viewLocation.x, y: viewLocation.y, width: 1, height: 1),
-            of: self,
-            preferredEdge: .minY
-        )
+    private func receivePromisedFiles(
+        from receivers: [NSFilePromiseReceiver],
+        completion: @escaping ([URL]) -> Void
+    ) {
+        let destination = Self.promisedFilesDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        } catch {
+            debugLog("[GyozaIsland] couldn't create drop folder: \(error)")
+            return
+        }
+
+        // Each receiver calls its reader once per promised file, on the
+        // promise queue; hop to the main actor before touching shared state.
+        let expectedFiles = receivers.reduce(0) { $0 + max($1.fileNames.count, 1) }
+        let batch = PromisedFileBatch(expectedCount: expectedFiles, completion: completion)
+        for receiver in receivers {
+            receiver.receivePromisedFiles(
+                atDestination: destination,
+                options: [:],
+                operationQueue: promiseQueue
+            ) { @Sendable fileURL, error in
+                Task { @MainActor in
+                    if let error {
+                        debugLog("[GyozaIsland] file promise failed: \(error)")
+                        batch.receive(nil)
+                    } else {
+                        batch.receive(fileURL)
+                    }
+                }
+            }
+        }
+    }
+
+    private func deliver(_ urls: [URL], toShelf: Bool, anchor: NSPoint) {
+        guard !urls.isEmpty else { return }
+        if toShelf {
+            panelState?.addTemporaryShelfFiles(urls)
+        } else {
+            share(urls, anchor: anchor)
+        }
+    }
+
+    private func share(_ items: [Any], anchor: NSPoint) {
+        if let service = NSSharingService(named: .sendViaAirDrop),
+           service.canPerform(withItems: items) {
+            debugLog("[GyozaIsland] launching AirDrop service")
+            service.perform(withItems: items)
+        } else {
+            debugLog("[GyozaIsland] AirDrop unavailable – showing sharing picker")
+            let picker = NSSharingServicePicker(items: items)
+            picker.show(
+                relativeTo: NSRect(x: anchor.x, y: anchor.y, width: 1, height: 1),
+                of: self,
+                preferredEdge: .minY
+            )
+        }
+    }
+}
+
+/// Collects the files of one promise drop and reports them together, so a
+/// multi-file drop opens a single AirDrop sheet.
+private final class PromisedFileBatch {
+    private var remaining: Int
+    private var urls: [URL] = []
+    private let completion: ([URL]) -> Void
+
+    init(expectedCount: Int, completion: @escaping ([URL]) -> Void) {
+        remaining = expectedCount
+        self.completion = completion
+    }
+
+    func receive(_ url: URL?) {
+        guard remaining > 0 else { return }
+        if let url {
+            urls.append(url)
+        }
+        remaining -= 1
+        if remaining == 0 {
+            completion(urls)
+        }
     }
 }

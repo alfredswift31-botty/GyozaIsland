@@ -3,7 +3,12 @@ import SwiftUI
 
 final class CameraPreviewNSView: NSView {
     private let session = AVCaptureSession()
+    // startRunning/stopRunning block and must not overlap, so both run in
+    // order on one serial queue instead of racing (or stalling the main thread).
+    private let sessionQueue = DispatchQueue(label: "com.gyoza.GyozaIsland.camera")
     private var previewLayer: AVCaptureVideoPreviewLayer?
+    // False once the mirror is closed; permission can be granted after that.
+    private var isActive = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -14,6 +19,7 @@ final class CameraPreviewNSView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func startSession() {
+        isActive = true
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             guard granted else { return }
             DispatchQueue.main.async { self?.configureSession() }
@@ -21,12 +27,19 @@ final class CameraPreviewNSView: NSView {
     }
 
     func stopSession() {
-        session.stopRunning()
+        isActive = false
+        sessionQueue.async { [session = self.session] in
+            session.stopRunning()
+        }
         previewLayer?.removeFromSuperlayer()
         previewLayer = nil
     }
 
     private func configureSession() {
+        // The permission prompt can outlive the mirror; don't start a camera
+        // nobody can see.
+        guard isActive, previewLayer == nil else { return }
+
         session.beginConfiguration()
         session.sessionPreset = .medium
 
@@ -50,7 +63,7 @@ final class CameraPreviewNSView: NSView {
         self.layer?.addSublayer(layer)
         previewLayer = layer
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        sessionQueue.async { [weak self] in
             self?.session.startRunning()
         }
     }

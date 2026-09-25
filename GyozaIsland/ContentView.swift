@@ -6,9 +6,11 @@ struct ContentView: View {
     @StateObject private var musicController = MusicController()
     @State private var expansionProgress: CGFloat = 0
     @State private var currentPage: Int = 0
-    @State private var isScrubbingPlayback = false
     @State private var isMirrorActive = false
-    @State private var scrubberPosition: Double = 0
+    // Position under the pointer while scrubbing. @GestureState resets itself
+    // when the drag ends or is cancelled (e.g. the scrubber is replaced on a
+    // track change mid-drag), so the bar can't get stuck on a stale position.
+    @GestureState private var scrubbingPosition: Double? = nil
     // Actual HStack offset in points. Animating this CGFloat directly gives a
     // smooth slide — changing Int currentPage inside withAnimation causes an
     // instant 430pt jump followed by a partial spring, which feels like a stutter.
@@ -29,8 +31,8 @@ struct ContentView: View {
     private let hoverInAnimation = Animation.spring(response: 0.42, dampingFraction: 0.78)
     private let hoverOutAnimation = Animation.spring(response: 0.50, dampingFraction: 0.92)
     private let pageSnapAnimation = Animation.spring(response: 0.28, dampingFraction: 0.88)
-    private var pageSwipeThreshold: CGFloat { expandedWidth * 0.16 }
-    private var pageVelocityThreshold: CGFloat { expandedWidth * 0.26 }
+    private let pageCount = 3
+    private let mirrorPage = 2
 
     private var isExpandedTarget: Bool {
         panelState.isInteractionActive || panelState.isFileDragActive
@@ -75,10 +77,7 @@ struct ContentView: View {
         }
         .onChange(of: panelState.pageSwipeTrigger) { _, _ in
             guard contentProgress > 0.95 else { return }
-            commitTriggeredSwipe(
-                direction: panelState.pageSwipeDirection,
-                source: "scroll"
-            )
+            commitTriggeredSwipe(direction: panelState.pageSwipeDirection)
         }
     }
 
@@ -256,6 +255,7 @@ struct ContentView: View {
                     .foregroundStyle(.white.opacity(0.46))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Remove \(item.url.lastPathComponent)")
         }
         .padding(.horizontal, 9)
         .frame(height: 30)
@@ -266,101 +266,78 @@ struct ContentView: View {
     }
 
     private var page2Content: some View {
-          HStack(alignment: .top, spacing: 0) {
-              VStack(spacing: 7) {
-                  ZStack {
-                      if isMirrorActive {
-                            Button { isMirrorActive = false } label: {
-                                CameraPreviewView()
-                                    .scaleEffect(x: -1, y: 1)
+        HStack(alignment: .top, spacing: 0) {
+            VStack(spacing: 7) {
+                ZStack {
+                    if isMirrorActive {
+                        Button { isMirrorActive = false } label: {
+                            CameraPreviewView()
+                                .scaleEffect(x: -1, y: 1)
+                                .frame(width: 104, height: 104)
+                                .clipShape(Circle())
+                                .overlay { Circle().stroke(Color.white.opacity(0.22), lineWidth: 1) }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Stop mirror")
+                    } else {
+                        Button { isMirrorActive = true } label: {
+                            ZStack {
+                                Circle()
+                                    .fill(Color.white.opacity(0.12))
                                     .frame(width: 104, height: 104)
-                                    .clipShape(Circle())
-                                    .overlay { Circle().stroke(Color.white.opacity(0.22), lineWidth: 1) }
+                                    .overlay { Circle().stroke(Color.white.opacity(0.18), lineWidth: 1) }
+                                Image(systemName: "camera.fill")
+                                    .font(.system(size: 33, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.88))
                             }
-                            .buttonStyle(.plain)
-                        } else {
-                          Button { isMirrorActive = true } label: {
-                              ZStack {
-                                  Circle()
-                                      .fill(Color.white.opacity(0.12))
-                                      .frame(width: 104, height: 104)
-                                      .overlay { Circle().stroke(Color.white.opacity(0.18), lineWidth: 1) }
-                                  Image(systemName: "camera.fill")
-                                      .font(.system(size: 33, weight: .semibold))
-                                      .foregroundStyle(.white.opacity(0.88))
-                              }
-                          }
-                          .buttonStyle(.plain)
-                      }
-                  }
-                  .frame(width: 104, height: 104)
-                  Text("Mirror")
-                      .font(.system(size: 12, weight: .semibold))
-                      .foregroundStyle(.white.opacity(0.55))
-              }
-              .padding(.top, 25)
-              .padding(.leading, 30)
-              Spacer(minLength: 0)
-          }
-          .frame(height: expandedHeight)
-      }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Start mirror")
+                    }
+                }
+                .frame(width: 104, height: 104)
+                Text("Mirror")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+            .padding(.top, 25)
+            .padding(.leading, 30)
+            Spacer(minLength: 0)
+        }
+        .frame(height: expandedHeight)
+    }
 
     private func baseOffset(for page: Int) -> CGFloat {
-        -CGFloat(min(max(page, 0), 2)) * expandedWidth
+        -CGFloat(min(max(page, 0), pageCount - 1)) * expandedWidth
     }
 
-    private func commitTriggeredSwipe(direction: Int, source: String) {
-        let targetPage: Int
-        if direction < 0 {
-            targetPage = min(currentPage + 1, 2)
-        } else if direction > 0 {
-            targetPage = max(currentPage - 1, 0)
-        } else {
-            targetPage = currentPage
-        }
-
-        snapToPage(
-            targetPage,
-            source: source,
-            translation: CGFloat(direction),
-            predictedTranslation: CGFloat(direction),
-            direction: direction < 0 ? "left" : direction > 0 ? "right" : "none"
-        )
+    /// A negative scroll direction advances to the next page; positive goes back.
+    private func commitTriggeredSwipe(direction: Int) {
+        guard direction != 0 else { return }
+        snapToPage(direction < 0 ? currentPage + 1 : currentPage - 1)
     }
 
-    private func snapToPage(
-        _ page: Int,
-        source: String,
-        translation: CGFloat,
-        predictedTranslation: CGFloat,
-        direction: String
-    ) {
-        let pageBefore = currentPage
-        let targetPage = min(max(page, 0), 2)
-        let finalOffset = baseOffset(for: targetPage)
-        print(
-            "[GyozaIsland] page snap",
-            "source=\(source)",
-            "from=\(pageBefore)",
-            "translation=\(translation)",
-            "predicted=\(predictedTranslation)",
-            "threshold=\(pageSwipeThreshold)",
-            "velocityThreshold=\(pageVelocityThreshold)",
-            "direction=\(direction)",
-            "target=\(targetPage)",
-            "finalOffset=\(finalOffset)"
-        )
+    private func snapToPage(_ page: Int) {
+        let targetPage = min(max(page, 0), pageCount - 1)
+        guard targetPage != currentPage else { return }
+        debugLog("[GyozaIsland] page snap from=\(currentPage) to=\(targetPage)")
 
         withAnimation(pageSnapAnimation) {
             currentPage = targetPage
-            pageOffset = finalOffset
+            pageOffset = baseOffset(for: targetPage)
             panelState.currentPage = targetPage
+        }
+
+        // Every page stays mounted in the paging HStack, so a mirror left on
+        // would keep the camera (and its green light) running off-screen.
+        if targetPage != mirrorPage {
+            isMirrorActive = false
         }
     }
 
     private var pageIndicator: some View {
         HStack(spacing: 5) {
-            ForEach(0..<3, id: \.self) { index in
+            ForEach(0..<pageCount, id: \.self) { index in
                 Circle()
                     .fill(currentPage == index ? Color.white.opacity(0.8) : Color.white.opacity(0.25))
                     .frame(width: 4, height: 4)
@@ -400,6 +377,7 @@ struct ContentView: View {
                     .transition(trackContentTransition)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Open Music")
 
             VStack(alignment: .leading, spacing: 6) {
                 trackText
@@ -407,19 +385,30 @@ struct ContentView: View {
                     .transition(trackContentTransition)
 
                 HStack(spacing: 16) {
-                    mediaButton(systemName: "backward.fill", symbolSize: 13, buttonSize: 38) {
+                    mediaButton(
+                        systemName: "backward.fill",
+                        symbolSize: 13,
+                        buttonSize: 38,
+                        accessibilityLabel: "Previous track"
+                    ) {
                         musicController.previousTrack()
                     }
 
                     mediaButton(
                         systemName: musicController.prefersPauseIcon ? "pause.fill" : "play.fill",
                         symbolSize: 18,
-                        buttonSize: 44
+                        buttonSize: 44,
+                        accessibilityLabel: musicController.prefersPauseIcon ? "Pause" : "Play"
                     ) {
                         musicController.togglePlayPause()
                     }
 
-                    mediaButton(systemName: "forward.fill", symbolSize: 13, buttonSize: 38) {
+                    mediaButton(
+                        systemName: "forward.fill",
+                        symbolSize: 13,
+                        buttonSize: 38,
+                        accessibilityLabel: "Next track"
+                    ) {
                         musicController.nextTrack()
                     }
 
@@ -464,7 +453,7 @@ struct ContentView: View {
         GeometryReader { proxy in
             let width = max(proxy.size.width, 1)
             let duration = musicController.playbackDuration
-            let position = isScrubbingPlayback ? scrubberPosition : musicController.playbackPosition
+            let position = scrubbingPosition ?? musicController.playbackPosition
             let progress = duration > 0 ? min(max(position / duration, 0), 1) : 0
 
             ZStack(alignment: .leading) {
@@ -486,11 +475,13 @@ struct ContentView: View {
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                    .onChanged { value in
-                        updateScrubber(locationX: value.location.x, width: width, shouldSeek: false)
+                    .updating($scrubbingPosition) { value, state, _ in
+                        state = scrubPosition(locationX: value.location.x, width: width)
                     }
                     .onEnded { value in
-                        updateScrubber(locationX: value.location.x, width: width, shouldSeek: true)
+                        if let position = scrubPosition(locationX: value.location.x, width: width) {
+                            musicController.seek(to: position)
+                        }
                     }
             )
         }
@@ -498,21 +489,23 @@ struct ContentView: View {
         .opacity(musicController.playbackDuration > 0 ? 1 : 0.45)
     }
 
-    private func updateScrubber(locationX: CGFloat, width: CGFloat, shouldSeek: Bool) {
-        guard musicController.playbackDuration > 0, width > 0 else { return }
+    /// Maps a point on the scrubber to a playback position, or nil when there
+    /// is nothing seekable.
+    private func scrubPosition(locationX: CGFloat, width: CGFloat) -> Double? {
+        let duration = musicController.playbackDuration
+        guard duration > 0, width > 0 else { return nil }
 
         let progress = min(max(locationX / width, 0), 1)
-        let position = Double(progress) * musicController.playbackDuration
-        isScrubbingPlayback = true
-        scrubberPosition = position
-
-        if shouldSeek {
-            isScrubbingPlayback = false
-            musicController.seek(to: position)
-        }
+        return Double(progress) * duration
     }
 
-    private func mediaButton(systemName: String, symbolSize: CGFloat, buttonSize: CGFloat, action: @escaping () -> Void) -> some View {
+    private func mediaButton(
+        systemName: String,
+        symbolSize: CGFloat,
+        buttonSize: CGFloat,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: symbolSize, weight: .semibold))
@@ -521,6 +514,7 @@ struct ContentView: View {
                 .background(.white.opacity(0.13), in: Circle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
     }
 
     private var airDropButton: some View {
@@ -548,11 +542,12 @@ struct ContentView: View {
                 .animation(.spring(response: 0.25, dampingFraction: 0.7), value: panelState.isAirDropTargeted)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("AirDrop")
     }
 
     private var airDropIcon: some View {
         Group {
-            if let image = NSImage(contentsOfFile: "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/AirDrop.icns") {
+            if let image = SystemIcons.airDrop {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
@@ -596,7 +591,7 @@ struct ContentView: View {
 
     private var appleMusicBadge: some View {
         ZStack {
-            if let appIcon = appleMusicAppIcon {
+            if let appIcon = SystemIcons.music {
                 Image(nsImage: appIcon)
                     .resizable()
                     .scaledToFit()
@@ -611,20 +606,27 @@ struct ContentView: View {
         .help("Apple Music")
     }
 
-    private var appleMusicAppIcon: NSImage? {
-        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Music") else {
-            return nil
-        }
-
-        return NSWorkspace.shared.icon(forFile: appURL.path)
-    }
-
     private func openAirDrop() {
         let airDropURL = URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app/Contents/Applications/AirDrop.app")
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         NSWorkspace.shared.openApplication(at: airDropURL, configuration: configuration)
     }
+}
+
+/// Icons read from disk once. The body re-renders every 0.5 s while music
+/// plays, and these used to be re-read (the .icns from disk) on every pass.
+private enum SystemIcons {
+    static let airDrop = NSImage(
+        contentsOfFile: "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/AirDrop.icns"
+    )
+
+    static let music: NSImage? = {
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Music") else {
+            return nil
+        }
+        return NSWorkspace.shared.icon(forFile: appURL.path)
+    }()
 }
 
 private struct IslandShellShape: Shape {

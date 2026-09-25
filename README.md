@@ -2,9 +2,20 @@
 
 Gyoza Island is a macOS panel app that sits at the notch. At rest it collapses to a pill that matches the physical notch cutout. Hover over it and it expands into a card with music controls, a file shelf, and a front-camera mirror. Move away and it folds back up.
 
-## Version 1.0
+## Version 1.1
 
-First release. The panel, three pages, music controls with scrubber, file vault with drag-and-drop and AirDrop, and the mirror are all working and stable.
+A reliability and polish pass over 1.0. Nothing looks different, but a lot behaves better:
+
+- **Smoother while you use the Mac.** The island no longer re-renders on every mouse move anywhere on screen, or on every drag event.
+- **No more freezes when Music hangs.** Every Apple Event to Music now times out after five seconds instead of AppleScript's default two minutes.
+- **Less work per sync.** Album artwork is exported only when the track changes, not every five seconds (and every half second near the end of a track).
+- **Camera turns off when you leave the mirror.** Swiping to another page used to leave the camera, and its green light, running off-screen.
+- **More drop sources.** Files from Photos, Mail and other apps that hand over file promises now land on the shelf and in AirDrop. Web links dropped on the island go to AirDrop.
+- **Scrubber can't get stuck.** A drag cut short by a track change no longer freezes the scrubber.
+- **Page swipes are single swipes.** Two quick swipes can no longer release each other's lock and double-turn a page.
+- **Locale-proof playback times.** Positions like `215,5` (comma decimals) are parsed correctly.
+- **Clearer errors.** A denied Automation permission now says where to fix it.
+- VoiceOver labels on the icon-only buttons, debug logging kept out of Release builds, unit tests, and a CI build.
 
 ## What it does
 
@@ -16,27 +27,42 @@ Hover detection uses global and local `NSEvent` monitors on mouse-moved and drag
 
 ### Music controls
 
-Page one shows the track playing in Apple Music: title, artist, artwork, and a scrubber. Playback position ticks forward locally every 0.5 seconds. Every five seconds (or within the last five seconds of a track) it syncs back from the Music app via AppleScript. Artwork gets written to a temp file so the image loads without blocking anything.
+Page one shows the track playing in Apple Music: title, artist, artwork, and a scrubber. Playback position ticks forward locally every 0.5 seconds. Every five seconds (and every half second within the last five seconds of a track) it syncs back from the Music app via AppleScript. Artwork is written to a temp file only when the track changes.
 
-Controls: play/pause, previous, next, and the scrubber. The play/pause icon flips immediately on tap rather than waiting for the AppleScript round-trip. Clicking the artwork opens the Music app if it is closed.
+Controls: play/pause, previous, next, and the scrubber. The play/pause icon flips immediately on tap rather than waiting for the AppleScript round-trip. Clicking the artwork opens the Music app.
+
+AppleScript runs synchronously on the main thread, so each call is capped at five seconds. If Music is hung or showing a dialog, the island says so instead of freezing.
 
 ### File vault
 
-Page two is a drag-and-drop shelf. Drop files in and they stay for the session. The island stays open while you go fetch more files, and collapses normally after you swipe away. Remove individual items with the button on each row.
+Page two is a drag-and-drop shelf. Drop files in and they stay for the session. The island stays open while you go fetch more files, and collapses normally after you swipe away. Remove individual items with the button on each row, or drag them back out.
 
-It handles modern Finder drags using `NSFilePromiseReceiver`, direct file URLs, and legacy `NSFilenamesPboardType` paths. Finder on recent macOS leads with promised URLs before the file data exists, so the vault handles that path too.
+Drops are resolved in order: direct file URLs (Finder and most apps), legacy `NSFilenamesPboardType` paths, then file promises via `NSFilePromiseReceiver`. Promised files (Photos, Mail attachments) are written to a session-only temp folder that is cleared on the next launch.
 
 ### AirDrop drop target
 
-Drop a file on the island while on any page other than the vault and it goes straight to `NSSharingService` with the AirDrop sender. Falls back to the system sharing picker if AirDrop is not available.
+Drop a file or a web link on the island while on any page other than the vault and it goes straight to `NSSharingService` with the AirDrop sender. Falls back to the system sharing picker if AirDrop can't take the items.
 
 ### Mirror
 
-Page three has a circular front-camera preview. Tap the icon to start an `AVCaptureSession` from the front camera, flipped horizontally so it reads like a mirror. Tap again to stop. Camera permission gets requested on first tap.
+Page three has a circular front-camera preview. Tap the icon to start an `AVCaptureSession` from the front camera, flipped horizontally so it reads like a mirror. Tap again, swipe to another page, or move away to stop it. Camera permission gets requested on first tap.
 
 ### Trackpad navigation
 
 Horizontal trackpad swipes page between sections. Both local and global scroll monitors handle events, so swiping works even when another app is in front. Vertical and diagonal scroll events are filtered out. The gesture uses a 2.6x multiplier against a 22-point threshold, and a 400 ms lock after each commit prevents double-fires.
+
+## Install
+
+Every push is built by GitHub Actions on a Mac runner. To get the latest build:
+
+1. Open the [Build workflow](https://github.com/alfredswift31-botty/GyozaIsland/actions/workflows/build.yml), pick the newest green run, and download the **GyozaIsland** artifact. Tagged versions (`v1.1`, ...) also appear under [Releases](https://github.com/alfredswift31-botty/GyozaIsland/releases).
+2. Unzip until you have `GyozaIsland.app`, quit the running copy, and drag the new one into Applications, replacing the old one.
+3. The CI build is ad-hoc signed, not notarized. The first time, right-click the app and choose **Open** (or allow it under System Settings › Privacy & Security).
+4. Because the signature differs from a build made in your own Xcode, macOS asks again for Music (Automation) and Camera access.
+
+## Building
+
+Open `GyozaIsland.xcodeproj` in Xcode 26 and run the `GyozaIsland` scheme. Unit tests live in `GyozaIslandTests` (Swift Testing).
 
 ## Tech
 
@@ -44,7 +70,7 @@ Horizontal trackpad swipes page between sections. Both local and global scroll m
 - AppKit (`NSPanel`, `NSEvent` monitors, `NSSharingService`, `NSFilePromiseReceiver`)
 - AVFoundation
 - AppleScript (Music playback)
-- macOS 13+
+- macOS 15.6+
 
 ## Related
 
