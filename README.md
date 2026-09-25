@@ -55,7 +55,7 @@ Horizontal trackpad swipes page between sections. Both local and global scroll m
 
 Every push is built by GitHub Actions on a Mac runner. To get the latest build:
 
-1. Open the [Build workflow](https://github.com/alfredswift31-botty/GyozaIsland/actions/workflows/build.yml), pick the newest green run, and download the **GyozaIsland** artifact. Tagged versions (`v1.1`, ...) also appear under [Releases](https://github.com/alfredswift31-botty/GyozaIsland/releases).
+1. Download `GyozaIsland.zip` from the latest [release](https://github.com/alfredswift31-botty/GyozaIsland/releases), or from the newest green run of the [Build workflow](https://github.com/alfredswift31-botty/GyozaIsland/actions/workflows/build.yml).
 2. Unzip until you have `GyozaIsland.app`, quit the running copy, and drag the new one into Applications, replacing the old one.
 3. The CI build is ad-hoc signed, not notarized. The first time, right-click the app and choose **Open** (or allow it under System Settings › Privacy & Security).
 4. Because the signature differs from a build made in your own Xcode, macOS asks again for Music (Automation) and Camera access.
