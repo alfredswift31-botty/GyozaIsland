@@ -1,6 +1,6 @@
 # Project ideas from the models already on this Mac (1 Oct 2026)
 
-Twelve projects proposed from the local models in place, researched against what each model can actually do and what a Swift app on Apple silicon can practically integrate. Ranked. **#4 became GyozaVitals** (released 1.0–1.0.4 on 2 Oct).
+Twelve projects proposed from the local models in place, researched against what each model can actually do and what a Swift app on Apple silicon can practically integrate. Ranked. **#4 became GyozaVitals** (1.0 on 2 Oct, 1.0.9 on 5 Oct). **#3 became Gyozaclikr** (researched and designed 5 Oct; Apple's on-device model takes images on macOS 27, so it leads with Apple Intelligence and keeps Qwen3-VL as the second engine).
 
 ## The inventory the list was built from
 | Capability | Models | Used by |
@@ -20,7 +20,7 @@ Twelve projects proposed from the local models in place, researched against what
 ## The twelve, ranked
 1. **Screen memory (local "Rewind").** Screenshots → Apple Vision OCR → nomic embeddings in sqlite-vec → reranker → hermes3 answers with the screenshot. Qwen3-VL only for screens OCR can't explain. High difficulty; needs dedup and retention from day one.
 2. **GyozaYap: local Ask over all meetings and honest action items.** nomic + reranker for Ask across meetings; hermes3 (128K, grammar-enforced JSON) extracts action items with a quoted transcript line the code verifies. Medium; biggest payoff per hour.
-3. **"Ask my screen" Service.** Select a region → Qwen3-VL: table to CSV, explain error, translate, read chart, find a button (bounding boxes in 0–1000 coordinates). Low–medium. Downscale to ≤1.5 MP; validate table totals.
+3. **"Ask my screen" Service** (→ Gyozaclikr). Select a region → Qwen3-VL: table to CSV, explain error, translate, read chart, find a button (bounding boxes in 0–1000 coordinates). Low–medium. Downscale to ≤1.5 MP; validate table totals.
 4. **GyozaVitals** (done): menu-bar monitor for loaded models and system load.
 5. **Photo curator.** JoyCaption + Qwen3-VL captions → embeddings → natural-language search, near-duplicates, Real-ESRGAN on export. Medium; background indexer.
 6. **GyozaPortalworks: import a ladder from a screenshot.** Qwen3-VL transcribes a TIA/GX screenshot into the ladder model; the existing CPU simulator verifies it by running it. Medium–high.
@@ -35,4 +35,4 @@ Twelve projects proposed from the local models in place, researched against what
 A generic chat UI (exists); speaker diarization on whisper (needs pyannote, CUDA-oriented); anything commercial on Qwen Image 2.1; replacing Flow's whisper with Apple SpeechAnalyzer without benchmarking on the user's own voice.
 
 ## Recommended order
-#4 (done) → #2 → #1. Do one of 11–12 as a toy, not a product.
+#4 (done) → #3 (Gyozaclikr, designed) → #2 → #1. Do one of 11–12 as a toy, not a product.
