@@ -1,6 +1,6 @@
 # Project ideas from the models already on this Mac (1 Oct 2026)
 
-Twelve projects proposed from the local models in place, researched against what each model can actually do and what a Swift app on Apple silicon can practically integrate. Ranked. **#4 became GyozaVitals** (1.0 on 2 Oct, 1.0.9 on 5 Oct). **#3 became Gyozaclikr** (researched and designed 5 Oct; Apple's on-device model takes images on macOS 27, so it leads with Apple Intelligence and keeps Qwen3-VL as the second engine).
+Twelve projects proposed from the local models in place, researched against what each model can actually do and what a Swift app on Apple silicon can practically integrate. Ranked. **#4 became GyozaVitals** (1.0 on 2 Oct, 1.0.9 on 5 Oct). **#3 became Gyozaclikr** (researched and designed 5 Oct, 1.0 to 1.0.10 on 6 Oct; Apple's on-device model takes images on macOS 27, so it leads with Apple Intelligence and keeps Qwen3-VL as the second engine; verified on the Mac: text and image answers from both engines, region capture with Live Text, a conversation in the box, drag, mail through Gmail).
 
 ## The inventory the list was built from
 | Capability | Models | Used by |
@@ -35,4 +35,4 @@ Twelve projects proposed from the local models in place, researched against what
 A generic chat UI (exists); speaker diarization on whisper (needs pyannote, CUDA-oriented); anything commercial on Qwen Image 2.1; replacing Flow's whisper with Apple SpeechAnalyzer without benchmarking on the user's own voice.
 
 ## Recommended order
-#4 (done) → #3 (Gyozaclikr, designed) → #2 → #1. Do one of 11–12 as a toy, not a product.
+#4 (done) → #3 (Gyozaclikr, shipped) → #2 → #1. Do one of 11–12 as a toy, not a product.
